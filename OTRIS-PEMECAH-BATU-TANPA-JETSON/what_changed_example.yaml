@@ -1,0 +1,7 @@
+session_a: captures/hr70
+session_b: captures/hr90
+controlled_variable: HR
+from: 70
+to: 90
+method: patient_simulator_fluke_prosim_8
+changed_by: biomed_sardjito

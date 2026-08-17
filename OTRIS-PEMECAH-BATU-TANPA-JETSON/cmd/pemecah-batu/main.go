@@ -1,0 +1,202 @@
+
+package main
+
+import (
+    "fmt"
+    "os"
+    "time"
+
+    "github.com/otris-id/otris-pemecah-batu/internal/capture"
+    "github.com/otris-id/otris-pemecah-batu/internal/classifier"
+    "github.com/otris-id/otris-pemecah-batu/internal/differential"
+    "github.com/otris-id/otris-pemecah-batu/internal/evidence"
+    "github.com/otris-id/otris-pemecah-batu/internal/fingerprint"
+    "github.com/otris-id/otris-pemecah-batu/internal/framing"
+    "github.com/otris-id/otris-pemecah-batu/internal/ingress"
+    "github.com/otris-id/otris-pemecah-batu/internal/inspector"
+    "github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
+    "github.com/otris-id/otris-pemecah-batu/internal/replay"
+    "github.com/spf13/cobra"
+)
+
+func main() {
+    rootCmd := &cobra.Command{
+        Use:   "pemecah-batu",
+        Short: "OTRIS Pemecah Batu - Universal Integration Workbench (Wakaf) PB-01 s/d PB-13",
+        Long: `Pemecah Batu: dari RAW BYTES jadi profile.yaml yang bisa di-share.
+
+Hukum:
+- UNKNOWN JANGAN DITEBAK
+- CHANGES_WITH_HR bukan IS_HR
+- false_data harus 0`,
+    }
+
+    // PB-06 CAPTURE
+    captureCmd := &cobra.Command{
+        Use:   "capture",
+        Short: "PB-06: Capture raw bytes (passive first)",
+        Run: func(cmd *cobra.Command, args []string) {
+            transport, _ := cmd.Flags().GetString("transport")
+            listen, _ := cmd.Flags().GetString("listen")
+            target, _ := cmd.Flags().GetString("target")
+            out, _ := cmd.Flags().GetString("out")
+            mode, _ := cmd.Flags().GetString("mode")
+            dur, _ := cmd.Flags().GetDuration("duration")
+            file, _ := cmd.Flags().GetString("file")
+            if out == "" {
+                out = fmt.Sprintf("captures/session_%d", time.Now().Unix())
+            }
+            cfg := capture.Config{
+                OutDir: out,
+                Ingress: ingress.Config{
+                    Mode: mode, Transport: transport, ListenAddr: listen, TargetAddr: target, FilePath: file,
+                },
+            }
+            if err := capture.Run(cfg, dur); err != nil {
+                fmt.Printf("Error: %v\n", err)
+                os.Exit(1)
+            }
+        },
+    }
+    captureCmd.Flags().String("transport", "tcp", "tcp|serial|file")
+    captureCmd.Flags().String("mode", "passive", "passive|active|file")
+    captureCmd.Flags().String("listen", "0.0.0.0:4000", "listen addr")
+    captureCmd.Flags().String("target", "192.168.1.50:4000", "target addr")
+    captureCmd.Flags().String("file", "", "file path untuk file mode")
+    captureCmd.Flags().String("out", "", "output dir")
+    captureCmd.Flags().Duration("duration", 30*time.Second, "durasi capture")
+
+    inspectCmd := &cobra.Command{
+        Use:   "inspect [dir]",
+        Short: "PB-07: Inspector",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            _, err := inspector.Run(args[0])
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+
+    framingCmd := &cobra.Command{
+        Use:   "framing [dir]",
+        Short: "PB-08: Framing Detector",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            _, err := framing.Run(args[0])
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+
+    classifyCmd := &cobra.Command{
+        Use:   "classify [dir]",
+        Short: "PB-09: Protocol Classifier",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            _, err := classifier.Run(args[0])
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+
+    fingerprintCmd := &cobra.Command{
+        Use:   "fingerprint [dir]",
+        Short: "PB-10: Fingerprint Engine",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            lib, _ := cmd.Flags().GetString("library")
+            _, err := fingerprint.Run(args[0], lib)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    fingerprintCmd.Flags().String("library", "profiles", "library dir")
+
+    diffCmd := &cobra.Command{
+        Use:   "differential [dirA] [dirB]",
+        Short: "PB-11: Differential Analyzer - buktikan CHANGES_WITH_HR",
+        Args: cobra.ExactArgs(2),
+        Run: func(cmd *cobra.Command, args []string) {
+            what, _ := cmd.Flags().GetString("what")
+            _, err := differential.Run(args[0], args[1], what)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    diffCmd.Flags().String("what", "", "what_changed.yaml path")
+
+    correlateCmd := &cobra.Command{
+        Use:   "correlate [dir]",
+        Short: "PB-11: Multi-sample correlation",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            field, _ := cmd.Flags().GetInt("field")
+            _, err := differential.Correlate(args[0], field)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    correlateCmd.Flags().Int("field", 2, "field position")
+
+    evidenceCmd := &cobra.Command{
+        Use:   "evidence-gate [dir]",
+        Short: "PB-12: Evidence Gate",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            ev, _ := cmd.Flags().GetString("evidence")
+            _, err := evidence.Run(args[0], ev)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    evidenceCmd.Flags().String("evidence", "", "evidence.json path")
+
+    replayCmd := &cobra.Command{
+        Use:   "replay [dir]",
+        Short: "PB-12: Replay Lab 1000x",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            count, _ := cmd.Flags().GetInt("count")
+            _, err := replay.Run(args[0], count)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    replayCmd.Flags().Int("count", 1000, "replay count")
+
+    buildCmd := &cobra.Command{
+        Use:   "build-profile [dir]",
+        Short: "PB-13: Profile Builder -> profile.yaml",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            out, _ := cmd.Flags().GetString("out")
+            ver, _ := cmd.Flags().GetString("version")
+            if out == "" {
+                out = fmt.Sprintf("profiles/experimental/%s/v%s", args[0], ver)
+            }
+            _, err := profilebuilder.Build(args[0], out, ver)
+            if err != nil { fmt.Println(err); os.Exit(1) }
+        },
+    }
+    buildCmd.Flags().String("out", "", "output dir")
+    buildCmd.Flags().String("version", "1.0.0", "version")
+
+    // full pipeline
+    pipelineCmd := &cobra.Command{
+        Use:   "pipeline [dir]",
+        Short: "Jalanin PB-07 s/d PB-13 sekaligus",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            dir := args[0]
+            fmt.Println("=== PIPELINE PB-07 s/d PB-13 ===")
+            inspector.Run(dir)
+            framing.Run(dir)
+            classifier.Run(dir)
+            fingerprint.Run(dir, "profiles")
+            evidence.Run(dir, "")
+            replay.Run(dir, 1000)
+            out := fmt.Sprintf("profiles/experimental/%s/v1.0.0", dir)
+            profilebuilder.Build(dir, out, "1.0.0")
+            fmt.Println("=== PIPELINE SELESAI ===")
+            fmt.Printf("Profile di: %s/profile.yaml\n", out)
+        },
+    }
+
+    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, pipelineCmd)
+
+    if err := rootCmd.Execute(); err != nil {
+        os.Exit(1)
+    }
+}
