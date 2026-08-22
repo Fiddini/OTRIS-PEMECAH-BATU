@@ -4,6 +4,7 @@ package capture
 // Simpan apa adanya, raw_stream.bin adalah kebenaran
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -64,7 +65,7 @@ func Run(cfg Config, stopAfter time.Duration) error {
 	buf := buffer.New(1000)
 	val := validator.New()
 
-	ctx := osBackground()
+	ctx := context.Background()
 	ch, err := ing.Listen(ctx)
 	if err != nil {
 		return err
@@ -145,7 +146,9 @@ loop:
 		"note": "raw_stream.bin adalah kebenaran, jangan diubah",
 	}
 	mf2, _ := os.Create(metaPath)
-	json.NewEncoder(mf2).SetIndent("", "  ").Encode(meta)
+	enc2 := json.NewEncoder(mf2)
+	enc2.SetIndent("", "  ")
+	enc2.Encode(meta)
 	mf2.Close()
 
 	fmt.Printf("[PB-06] SELESAI\n")
@@ -158,13 +161,3 @@ loop:
 }
 
 // helper agar tidak import context berat di contoh
-func osBackground() osContext {
-	return osContext{}
-}
-
-type osContext struct{}
-func (osContext) Done() <-chan struct{} {
-	// tidak pernah done di versi skeleton, timeout diatur di Run
-	ch := make(chan struct{})
-	return ch
-}

@@ -68,7 +68,9 @@ func Run(inDir string, evidencePath string) (GateReport, error) {
 
     outPath := filepath.Join(inDir, "evidence_gate_report.json")
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-12] EVIDENCE GATE selesai: verdict=%s evidence=%d\n", report.Verdict, len(report.Evidence))
     return report, nil

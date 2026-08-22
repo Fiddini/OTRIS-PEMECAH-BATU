@@ -77,7 +77,9 @@ func Run(inDir string) (Report, error) {
     }
     outPath := filepath.Join(inDir, "framing_candidates.json")
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-08] FRAMING selesai: selected=%s candidates=%d\n", selected, len(candidates))
     return report, nil

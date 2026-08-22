@@ -91,7 +91,9 @@ func Run(dirA string, dirB string, whatChangedPath string) (Report, error) {
         outPath = filepath.Join(filepath.Dir(dirA), fmt.Sprintf("diff_%s_vs_%s.json", filepath.Base(dirA), filepath.Base(dirB)))
     }
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-11] DIFFERENTIAL selesai: %d field berubah\n", len(diffs))
     for _, d := range diffs {
@@ -141,7 +143,9 @@ func Correlate(inDir string, fieldPos int) (CorrelationReport, error) {
     }
     outPath := filepath.Join(inDir, "correlation_report.json")
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc2 := json.NewEncoder(f)
+    enc2.SetIndent("", "  ")
+    enc2.Encode(report)
     f.Close()
     fmt.Printf("[PB-11] CORRELATE selesai: %d samples correlation=%.2f\n", len(values), report.Correlation)
     return report, nil

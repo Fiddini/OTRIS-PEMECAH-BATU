@@ -72,7 +72,9 @@ func Run(inDir string, libraryDir string) (Report, error) {
     }
     outPath := filepath.Join(inDir, "fingerprint_match.json")
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-10] FINGERPRINT selesai: hash=%s matches=%d\n", hashStr, len(matches))
     return report, nil

@@ -72,7 +72,9 @@ func Run(inDir string, count int) (Report, error) {
 
     outPath := filepath.Join(inDir, fmt.Sprintf("replay_report_%d.json", count))
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-12] REPLAY LAB selesai: %d replay, success=%d false_data=%d rate=%.4f\n", count, success, falseData, rate)
     return report, nil

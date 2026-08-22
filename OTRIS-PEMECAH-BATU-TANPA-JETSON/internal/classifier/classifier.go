@@ -60,7 +60,9 @@ func Run(inDir string) (Report, error) {
     }
     outPath := filepath.Join(inDir, "protocol_classification.json")
     f, _ := os.Create(outPath)
-    json.NewEncoder(f).SetIndent("", "  ").Encode(report)
+    enc := json.NewEncoder(f)
+    enc.SetIndent("", "  ")
+    enc.Encode(report)
     f.Close()
     fmt.Printf("[PB-09] CLASSIFIER selesai: %s (%.2f) parser=%s\n", family, conf, parser)
     return report, nil

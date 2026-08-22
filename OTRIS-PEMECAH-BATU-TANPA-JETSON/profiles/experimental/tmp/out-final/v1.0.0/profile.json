@@ -1,0 +1,40 @@
+{
+  "profile_id": "out-final_v1.0.0",
+  "version": "1.0.0",
+  "status": "SUPPORTED",
+  "manufacturer": "Mindray",
+  "model": "BeneVision N12",
+  "firmware_tested": "01.12.00",
+  "transport": "TCP_RAW",
+  "framing": "NEWLINE",
+  "protocol_family": "HL7_V2",
+  "parser_identity": "generic_hl7_v2",
+  "mapping_profile": [
+    {
+      "source_pos": 2,
+      "source_code": "HR",
+      "canonical": "heart_rate",
+      "unit": "bpm",
+      "confidence": 0.97
+    },
+    {
+      "source_pos": 3,
+      "source_code": "SpO2",
+      "canonical": "spo2",
+      "unit": "%",
+      "confidence": 0.95
+    }
+  ],
+  "evidence_reference": [
+    "VENDOR_MANUAL p.45",
+    "SIMULATOR_LOG correlation 0.97",
+    "SCREEN_PHOTO"
+  ],
+  "validation_status": "REAL_DEVICE_VALIDATED",
+  "validated_at": "2026-08-23",
+  "false_data_rate": 0,
+  "known_limitations": [
+    "Firmware 01.10.00 belum tested",
+    "Field EtCO2 belum ada evidence"
+  ]
+}

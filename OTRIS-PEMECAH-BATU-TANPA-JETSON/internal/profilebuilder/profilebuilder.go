@@ -92,11 +92,11 @@ func Build(inDir string, outDir string, version string) (Profile, error) {
     yamlPath := filepath.Join(outDir, "profile.yaml")
     f, _ := os.Create(yamlPath)
     f.WriteString(fmt.Sprintf("profile_id: %s\n", profile.ProfileID))
-    f.WriteString(fmt.Sprintf("version: "%s"\n", profile.Version))
+    f.WriteString(fmt.Sprintf("version: \"%s\"\n", profile.Version))
     f.WriteString(fmt.Sprintf("status: %s\n", profile.Status))
     f.WriteString(fmt.Sprintf("manufacturer: %s\n", profile.Manufacturer))
     f.WriteString(fmt.Sprintf("model: %s\n", profile.Model))
-    f.WriteString(fmt.Sprintf("firmware_tested: "%s"\n", profile.FirmwareTested))
+    f.WriteString(fmt.Sprintf("firmware_tested: \"%s\"\n", profile.FirmwareTested))
     f.WriteString(fmt.Sprintf("transport: %s\n", profile.Transport))
     f.WriteString(fmt.Sprintf("framing: %s\n", profile.Framing))
     f.WriteString(fmt.Sprintf("protocol_family: %s\n", profile.ProtocolFamily))
@@ -105,24 +105,26 @@ func Build(inDir string, outDir string, version string) (Profile, error) {
     f.WriteString("  fields:\n")
     for _, m := range profile.Mapping {
         f.WriteString(fmt.Sprintf("    - source_pos: %d\n", m.SourcePos))
-        f.WriteString(fmt.Sprintf("      source_code: "%s"\n", m.SourceCode))
+        f.WriteString(fmt.Sprintf("      source_code: \"%s\"\n", m.SourceCode))
         f.WriteString(fmt.Sprintf("      canonical: %s\n", m.Canonical))
         f.WriteString(fmt.Sprintf("      unit: %s\n", m.Unit))
         f.WriteString(fmt.Sprintf("      confidence: %.2f\n", m.Confidence))
     }
     f.WriteString(fmt.Sprintf("validation_status: %s\n", profile.ValidationStatus))
-    f.WriteString(fmt.Sprintf("validated_at: "%s"\n", profile.ValidatedAt))
+    f.WriteString(fmt.Sprintf("validated_at: \"%s\"\n", profile.ValidatedAt))
     f.WriteString(fmt.Sprintf("false_data_rate: %.4f\n", profile.FalseDataRate))
     f.WriteString("known_limitations:\n")
     for _, l := range profile.KnownLimitations {
-        f.WriteString(fmt.Sprintf("  - "%s"\n", l))
+        f.WriteString(fmt.Sprintf("  - \"%s\"\n", l))
     }
     f.Close()
 
     // json juga
     jsonPath := filepath.Join(outDir, "profile.json")
     jf, _ := os.Create(jsonPath)
-    json.NewEncoder(jf).SetIndent("", "  ").Encode(profile)
+    enc := json.NewEncoder(jf)
+    enc.SetIndent("", "  ")
+    enc.Encode(profile)
     jf.Close()
 
     fmt.Printf("[PB-13] PROFILE BUILDER selesai: %s\n", yamlPath)
