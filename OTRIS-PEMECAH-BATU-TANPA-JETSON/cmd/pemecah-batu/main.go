@@ -43,6 +43,11 @@ Hukum:
             mode, _ := cmd.Flags().GetString("mode")
             dur, _ := cmd.Flags().GetDuration("duration")
             file, _ := cmd.Flags().GetString("file")
+            port, _ := cmd.Flags().GetString("port")
+            baud, _ := cmd.Flags().GetInt("baud")
+            if (mode == "serial" || transport == "serial") && file == "" {
+                file = port
+            }
             if out == "" {
                 out = fmt.Sprintf("captures/session_%d", time.Now().Unix())
             }
@@ -50,6 +55,7 @@ Hukum:
                 OutDir: out,
                 Ingress: ingress.Config{
                     Mode: mode, Transport: transport, ListenAddr: listen, TargetAddr: target, FilePath: file,
+                    SerialPort: port, BaudRate: baud,
                 },
             }
             if err := capture.Run(cfg, dur); err != nil {
@@ -59,10 +65,12 @@ Hukum:
         },
     }
     captureCmd.Flags().String("transport", "tcp", "tcp|serial|file")
-    captureCmd.Flags().String("mode", "passive", "passive|active|file")
+    captureCmd.Flags().String("mode", "passive", "passive|active|file|serial")
     captureCmd.Flags().String("listen", "0.0.0.0:4000", "listen addr")
     captureCmd.Flags().String("target", "192.168.1.50:4000", "target addr")
-    captureCmd.Flags().String("file", "", "file path untuk file mode")
+    captureCmd.Flags().String("file", "", "file path untuk file mode ATAU port path untuk serial")
+    captureCmd.Flags().String("port", "/dev/ttyUSB0", "serial port")
+    captureCmd.Flags().Int("baud", 9600, "baudrate")
     captureCmd.Flags().String("out", "", "output dir")
     captureCmd.Flags().Duration("duration", 30*time.Second, "durasi capture")
 
