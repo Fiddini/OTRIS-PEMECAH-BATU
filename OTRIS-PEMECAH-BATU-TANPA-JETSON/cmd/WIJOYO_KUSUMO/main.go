@@ -21,9 +21,9 @@ import (
 
 func main() {
     rootCmd := &cobra.Command{
-        Use:   "pemecah-batu",
-        Short: "OTRIS Pemecah Batu - Universal Integration Workbench (Wakaf) PB-01 s/d PB-13",
-        Long: `Pemecah Batu: dari RAW BYTES jadi profile.yaml yang bisa di-share.
+        Use: "WIJOYO_KUSUMO",
+        Short: "OTRIS WIJOYO KUSUMO - Universal Integration Workbench (Wakaf) PB-01 s/d PB-13",
+        Long: `WIJOYO KUSUMO: dari RAW BYTES jadi profile.yaml yang bisa di-share.
 
 Hukum:
 - UNKNOWN JANGAN DITEBAK
