@@ -6,7 +6,10 @@ import (
     "os"
     "time"
 
-    "github.com/otris-id/otris-pemecah-batu/internal/capture"
+    "github.com/otris-id/otris-pemecah-batu/internal/auth"
+	"github.com/otris-id/otris-pemecah-batu/internal/capture"
+	"github.com/otris-id/otris-pemecah-batu/internal/license"
+	"github.com/otris-id/otris-pemecah-batu/internal/telemetry"
     "github.com/otris-id/otris-pemecah-batu/internal/classifier"
     "github.com/otris-id/otris-pemecah-batu/internal/differential"
     "github.com/otris-id/otris-pemecah-batu/internal/evidence"
@@ -20,6 +23,8 @@ import (
 )
 
 func main() {
+	auth.Check()
+	license.CheckMaintenance()
     rootCmd := &cobra.Command{
         Use: "WIJOYO_KUSUMO",
         Short: "OTRIS WIJOYO KUSUMO - Universal Integration Workbench (Wakaf) PB-01 s/d PB-13",
@@ -204,7 +209,31 @@ Hukum:
 
     rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, pipelineCmd)
 
-    if err := rootCmd.Execute(); err != nil {
+    
+    var registerCmd = &cobra.Command{
+        Use: "register",
+        Short: "Daftar WAKAF WIJOYO KUSUMO - untuk TK Cia & kuliah Lacita",
+        Run: func(cmd *cobra.Command, args []string) {
+            nama, _ := cmd.Flags().GetString("nama")
+            hp, _ := cmd.Flags().GetString("hp")
+            lokasi, _ := cmd.Flags().GetString("lokasi")
+            usaha, _ := cmd.Flags().GetString("usaha")
+            home, _ := os.UserHomeDir()
+            os.MkdirAll(home+"/.wijoyo_kusumo", 0755)
+            data := fmt.Sprintf(`{"nama":"%s","hp":"%s","lokasi":"%s","usaha":"%s","tgl":"%s"}`, nama, hp, lokasi, usaha, time.Now().Format("2006-01-02"))
+            os.WriteFile(home+"/.wijoyo_kusumo/user.json", []byte(data), 0644)
+            license.SetExpiry(30)
+            fmt.Printf("✅ WIJOYO KUSUMO terdaftar: %s - %s\n", nama, lokasi)
+            telemetry.Log()
+        },
+    }
+    registerCmd.Flags().String("nama", "", "")
+    registerCmd.Flags().String("hp", "", "")
+    registerCmd.Flags().String("lokasi", "", "")
+    registerCmd.Flags().String("usaha", "", "")
+    rootCmd.AddCommand(registerCmd)
+
+	if err := rootCmd.Execute(); err != nil {
         os.Exit(1)
     }
 }
