@@ -2,14 +2,55 @@ package mapping
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/otris-id/otris-pemecah-batu/internal/evidence"
 )
 
 // Helper: valid test inputs
 func validTestInputs() (identity, version, proto string, pos int, code, unit, concept, canonical, prov, author string) {
 	return "test_mapping", "1.0.0", "HL7_V2", 2, "HR", "bpm", "heart_rate", "bpm", "manual test claim", "test_author"
+}
+
+// approveForTest constructs a legitimate EVIDENCE_APPROVED test fixture.
+// This internal-only helper captures the mapping's current claim snapshot
+// and sets private authority state for testing transition legality checks.
+// It does NOT expose authority externally or weaken the private status field.
+func approveForTest(t *testing.T, def *MappingDefinition) {
+	t.Helper()
+	if def == nil {
+		t.Fatal("approveForTest requires non-nil MappingDefinition")
+	}
+
+	// Capture exact claim snapshot as Evidence Gate would
+	claim := def.Claim()
+	now := time.Now().UTC()
+
+	// Create private approval record binding to this exact claim
+	def.approval = &evidenceApproval{
+		claim:           claim,
+		provenance:      def.Provenance,
+		author:          def.ProvenanceAuthor,
+		differentialRef: def.DifferentialReportRef,
+		createdAt:       def.CreatedAt,
+		reportRef:       "/test/evidence_gate_report.json",
+		approvedAt:      now,
+		refs: []Evidence{
+			{Type: "TEST_EVIDENCE", Ref: "test:reference"},
+		},
+	}
+
+	// Set public fields to match captured snapshot
+	def.EvidenceGateReportRef = def.approval.reportRef
+	def.EvidenceGateVerdict = evidence.ApprovedForMapping
+	def.EvidenceApprovedAt = now
+	def.EvidenceRefs = slices.Clone(def.approval.refs)
+
+	// Advance status; validateAuthority will verify all fields match snapshot
+	def.status = StatusEvidenceApproved
 }
 
 // Test A: Complete explicit claim → valid CANDIDATE
@@ -21,8 +62,8 @@ func TestNewMappingDefinitionValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if def.Status != StatusCandidate {
-		t.Errorf("expected status CANDIDATE, got %s", def.Status)
+	if def.status != StatusCandidate {
+		t.Errorf("expected status CANDIDATE, got %s", def.status)
 	}
 	if def.MappingIdentity != identity {
 		t.Errorf("expected MappingIdentity %s, got %s", identity, def.MappingIdentity)
@@ -225,8 +266,8 @@ func TestCanTransitionCandidateToEvidenceApproved(t *testing.T) {
 	identity, version, proto, pos, code, unit, concept, canonical, prov, author := validTestInputs()
 	def, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
 
-	if def.Status != StatusCandidate {
-		t.Fatalf("initial status should be CANDIDATE, got %s", def.Status)
+	if def.status != StatusCandidate {
+		t.Fatalf("initial status should be CANDIDATE, got %s", def.status)
 	}
 
 	// Query: can transition to EVIDENCE_APPROVED?
@@ -243,8 +284,8 @@ func TestCanTransitionCandidateToEvidenceApproved(t *testing.T) {
 
 	// Note: Actual state mutation would be performed by Evidence Gate authority in D3D/D3E.
 	// MappingDefinition does NOT provide public self-promotion methods.
-	if def.Status != StatusCandidate {
-		t.Errorf("status should remain CANDIDATE (no self-mutation allowed), got %s", def.Status)
+	if def.status != StatusCandidate {
+		t.Errorf("status should remain CANDIDATE (no self-mutation allowed), got %s", def.status)
 	}
 }
 
@@ -252,9 +293,7 @@ func TestCanTransitionCandidateToEvidenceApproved(t *testing.T) {
 func TestCanTransitionEvidenceApprovedToReplayValidated(t *testing.T) {
 	identity, version, proto, pos, code, unit, concept, canonical, prov, author := validTestInputs()
 	def, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
-	// Simulate Evidence Gate authority setting status
-	def.Status = StatusEvidenceApproved
-	def.EvidenceApprovedAt = time.Now()
+	approveForTest(t, def)
 
 	// Query: can transition to REPLAY_VALIDATED?
 	canTransition := def.CanTransitionTo(StatusReplayValidated)
@@ -270,8 +309,8 @@ func TestCanTransitionEvidenceApprovedToReplayValidated(t *testing.T) {
 
 	// Note: Actual state mutation would be performed by Replay authority in D3D/D3E.
 	// MappingDefinition does NOT provide public self-promotion methods.
-	if def.Status != StatusEvidenceApproved {
-		t.Errorf("status should remain EVIDENCE_APPROVED (no self-mutation allowed), got %s", def.Status)
+	if def.status != StatusEvidenceApproved {
+		t.Errorf("status should remain EVIDENCE_APPROVED (no self-mutation allowed), got %s", def.status)
 	}
 }
 
@@ -292,8 +331,8 @@ func TestCannotSkipEvidenceGateTransition(t *testing.T) {
 		t.Error("expected ValidateTransitionTo(REPLAY_VALIDATED) to fail for CANDIDATE, got nil")
 	}
 
-	if def.Status != StatusCandidate {
-		t.Errorf("status should remain CANDIDATE, got %s", def.Status)
+	if def.status != StatusCandidate {
+		t.Errorf("status should remain CANDIDATE, got %s", def.status)
 	}
 }
 
@@ -302,7 +341,7 @@ func TestBackwardTransitionsIllegal(t *testing.T) {
 	identity, version, proto, pos, code, unit, concept, canonical, prov, author := validTestInputs()
 	def, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
 	// Simulate REPLAY_VALIDATED state
-	def.Status = StatusReplayValidated
+	def.status = StatusReplayValidated
 	def.ReplayValidatedAt = time.Now()
 
 	// Query: can go back to EVIDENCE_APPROVED?
@@ -317,8 +356,8 @@ func TestBackwardTransitionsIllegal(t *testing.T) {
 		t.Error("expected ValidateTransitionTo(EVIDENCE_APPROVED) to fail for REPLAY_VALIDATED, got nil")
 	}
 
-	if def.Status != StatusReplayValidated {
-		t.Errorf("status should remain REPLAY_VALIDATED, got %s", def.Status)
+	if def.status != StatusReplayValidated {
+		t.Errorf("status should remain REPLAY_VALIDATED, got %s", def.status)
 	}
 }
 
@@ -327,7 +366,7 @@ func TestUnknownStatusTransitionsIllegal(t *testing.T) {
 	identity, version, proto, pos, code, unit, concept, canonical, prov, author := validTestInputs()
 	def, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
 
-	def.Status = Status("UNKNOWN_STATUS")
+	def.status = Status("UNKNOWN_STATUS")
 
 	// Query: can transition from unknown status?
 	canTransition := def.CanTransitionTo(StatusEvidenceApproved)
@@ -348,9 +387,8 @@ func TestJSONMarshalUnmarshal(t *testing.T) {
 	original, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
 	original.DeviceFingerprint = "abc123"
 	original.DeviceIdentityRef = "test_device"
-	// Simulate Evidence Gate authority setting status
-	original.Status = StatusEvidenceApproved
-	original.EvidenceApprovedAt = time.Now()
+	// Set up EVIDENCE_APPROVED state with legitimate authority binding
+	approveForTest(t, original)
 
 	// Marshal to JSON
 	data, err := json.Marshal(original)
@@ -358,31 +396,64 @@ func TestJSONMarshalUnmarshal(t *testing.T) {
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	// Unmarshal from JSON
-	restored := &MappingDefinition{}
-	err = json.Unmarshal(data, restored)
-	if err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+	// Verify marshaled data includes the status
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal(data, &jsonMap); err != nil {
+		t.Fatalf("unmarshal JSON map failed: %v", err)
+	}
+	if jsonMap["status"] != "EVIDENCE_APPROVED" {
+		t.Errorf("marshaled status incorrect: %v", jsonMap["status"])
 	}
 
-	// Verify all fields preserved
-	if restored.MappingIdentity != original.MappingIdentity {
-		t.Errorf("MappingIdentity not preserved: %s vs %s", restored.MappingIdentity, original.MappingIdentity)
+	// Unmarshal from JSON: FAILS because JSON contains advanced status (spec §11: JSON never restores authority)
+	// This proves JSON cannot be used to inject or restore advanced authority status.
+	restored := &MappingDefinition{}
+	err = json.Unmarshal(data, restored)
+	if err == nil {
+		t.Error("unmarshal should reject EVIDENCE_APPROVED status from JSON (JSON cannot restore authority)")
 	}
-	if restored.SourceCode != original.SourceCode {
-		t.Errorf("SourceCode not preserved: %s vs %s", restored.SourceCode, original.SourceCode)
+	if !strings.Contains(err.Error(), "JSON import requires CANDIDATE") {
+		t.Errorf("expected CANDIDATE-only rejection error, got: %v", err)
 	}
-	if restored.CanonicalConcept != original.CanonicalConcept {
-		t.Errorf("CanonicalConcept not preserved: %s vs %s", restored.CanonicalConcept, original.CanonicalConcept)
+
+	// Create a CANDIDATE version by re-marshaling from scratch
+	candidate, _ := New(identity, version, proto, pos, code, unit, concept, canonical, prov, author)
+	candidate.DeviceFingerprint = "abc123"
+	candidate.DeviceIdentityRef = "test_device"
+
+	candidateData, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatalf("marshal CANDIDATE failed: %v", err)
 	}
-	if restored.Status != original.Status {
-		t.Errorf("Status not preserved: %s vs %s", restored.Status, original.Status)
+
+	// Unmarshal CANDIDATE from JSON: must succeed
+	restored = &MappingDefinition{}
+	err = json.Unmarshal(candidateData, restored)
+	if err != nil {
+		t.Fatalf("unmarshal CANDIDATE failed: %v", err)
 	}
-	if restored.DeviceFingerprint != original.DeviceFingerprint {
-		t.Errorf("DeviceFingerprint not preserved: %s vs %s", restored.DeviceFingerprint, original.DeviceFingerprint)
+
+	// Verify mapping claim preserved
+	if restored.MappingIdentity != candidate.MappingIdentity {
+		t.Errorf("MappingIdentity not preserved: %s vs %s", restored.MappingIdentity, candidate.MappingIdentity)
 	}
-	if restored.DeviceIdentityRef != original.DeviceIdentityRef {
-		t.Errorf("DeviceIdentityRef not preserved: %s vs %s", restored.DeviceIdentityRef, original.DeviceIdentityRef)
+	if restored.SourceCode != candidate.SourceCode {
+		t.Errorf("SourceCode not preserved: %s vs %s", restored.SourceCode, candidate.SourceCode)
+	}
+	if restored.CanonicalConcept != candidate.CanonicalConcept {
+		t.Errorf("CanonicalConcept not preserved: %s vs %s", restored.CanonicalConcept, candidate.CanonicalConcept)
+	}
+	if restored.DeviceFingerprint != candidate.DeviceFingerprint {
+		t.Errorf("DeviceFingerprint not preserved: %s vs %s", restored.DeviceFingerprint, candidate.DeviceFingerprint)
+	}
+	if restored.DeviceIdentityRef != candidate.DeviceIdentityRef {
+		t.Errorf("DeviceIdentityRef not preserved: %s vs %s", restored.DeviceIdentityRef, candidate.DeviceIdentityRef)
+	}
+
+	// Verify deserialized status is CANDIDATE
+	status, _ := restored.Status()
+	if status != StatusCandidate {
+		t.Errorf("deserialized status should be CANDIDATE, got %s", status)
 	}
 }
 
@@ -456,17 +527,17 @@ func TestValidateEnforcesAllFields(t *testing.T) {
 		t.Fatalf("expected valid CANDIDATE definition, got error: %v", err)
 	}
 
-	// Missing evidence context when EVIDENCE_APPROVED should fail
-	def.Status = StatusEvidenceApproved
+	// EVIDENCE_APPROVED without proper authority binding should fail
+	// (direct status assignment without approval field violates authority model)
+	def.status = StatusEvidenceApproved
 	def.EvidenceApprovedAt = time.Now()
 	if err := def.Validate(); err == nil {
-		t.Error("expected validation error for EVIDENCE_APPROVED without evidence context")
+		t.Error("expected validation error for EVIDENCE_APPROVED without approval binding")
 	}
 
-	// Set evidence context and should pass
-	def.EvidenceGateReportRef = "/path/to/report.json"
-	def.EvidenceRefs = []Evidence{{Type: "VENDOR_MANUAL", Ref: "Manual p.45"}}
+	// Set up valid EVIDENCE_APPROVED with legitimate authority binding
+	approveForTest(t, def)
 	if err := def.Validate(); err != nil {
-		t.Fatalf("expected valid EVIDENCE_APPROVED, got error: %v", err)
+		t.Fatalf("expected valid EVIDENCE_APPROVED with authority binding, got error: %v", err)
 	}
 }

@@ -1,20 +1,20 @@
 package mapping
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/otris-id/otris-pemecah-batu/internal/evidence"
 )
 
-// Evidence represents a single evidence item supporting a mapping claim.
-// Reused from evidence package conceptually but defined here to avoid circular imports.
-type Evidence struct {
-	Type  string `json:"type"`              // VENDOR_MANUAL, SIMULATOR_LOG, SCREEN_PHOTO
-	Ref   string `json:"ref"`               // reference path or citation
-	Quote string `json:"quote,omitempty"`   // supporting quote if applicable
-}
+// Evidence is report data, not an approval credential.
+type Evidence = evidence.Evidence
 
 // MappingDefinition represents an explicit source→canonical field mapping claim
 // with full provenance trail. Atomic: one definition = one field mapping.
@@ -47,7 +47,8 @@ type MappingDefinition struct {
 	ProvenanceAuthor string `json:"provenance_author"` // role/person/system responsible for the claim
 
 	// Status & Timestamps
-	Status               Status    `json:"status"`                 // CANDIDATE, EVIDENCE_APPROVED, REPLAY_VALIDATED
+	status               Status
+	approval             *evidenceApproval
 	CreatedAt            time.Time `json:"created_at"`             // when MappingDefinition was created
 	EvidenceApprovedAt   time.Time `json:"evidence_approved_at,omitempty"`   // when Evidence Gate approved
 	ReplayValidatedAt    time.Time `json:"replay_validated_at,omitempty"`    // when Replay validated
@@ -106,14 +107,14 @@ func New(
 		CanonicalUnit:      canonicalUnit,
 		Provenance:         provenance,
 		ProvenanceAuthor:   provenanceAuthor,
-		Status:             StatusCandidate,
+		status:             StatusCandidate,
 		CreatedAt:          time.Now(),
 		EvidenceRefs:       []Evidence{},
 	}, nil
 }
 
 // SetEvidenceContext associates evidence gate report and evidence items with this definition.
-// Does not change status; that is done by TransitionToEvidenceApproved.
+// Stores report data only; neither this data nor its verdict grants authority.
 func (m *MappingDefinition) SetEvidenceContext(reportRef string, evidenceRefs []Evidence, verdict string) error {
 	if err := validateRequiredField("evidence_gate_report_ref", reportRef); err != nil {
 		return err
@@ -122,7 +123,7 @@ func (m *MappingDefinition) SetEvidenceContext(reportRef string, evidenceRefs []
 		return fmt.Errorf("evidence_refs cannot be empty")
 	}
 	m.EvidenceGateReportRef = reportRef
-	m.EvidenceRefs = evidenceRefs
+	m.EvidenceRefs = slices.Clone(evidenceRefs)
 	m.EvidenceGateVerdict = verdict
 	return nil
 }
@@ -136,11 +137,19 @@ func (m *MappingDefinition) SetDifferentialContext(reportRef string) error {
 	return nil
 }
 
-// CanTransitionTo returns true if a transition from current status to target is legal.
-// This is a query method; it does NOT perform the transition.
-// State mutation is the responsibility of external authority (Evidence Gate, Replay).
+// Status observes authoritative state only while definition integrity holds.
+// Callers must not mutate public fields concurrently with validation or review.
+func (m *MappingDefinition) Status() (Status, error) {
+	if err := m.Validate(); err != nil {
+		return "", err
+	}
+	return m.status, nil
+}
+
+// CanTransitionTo is a pure legality check, not authority to execute a transition.
 func (m *MappingDefinition) CanTransitionTo(target Status) bool {
-	return m.Status.CanTransitionTo(target)
+	status, err := m.Status()
+	return err == nil && status.CanTransitionTo(target)
 }
 
 // ValidateTransitionTo checks if transition to target status is legal and returns error if not.
@@ -148,7 +157,7 @@ func (m *MappingDefinition) CanTransitionTo(target Status) bool {
 // State mutation must be performed by authorized external authority (D3D/D3E integration).
 func (m *MappingDefinition) ValidateTransitionTo(target Status) error {
 	if !m.CanTransitionTo(target) {
-		return fmt.Errorf("illegal status transition from %s to %s", m.Status, target)
+		return fmt.Errorf("illegal or untrusted status transition to %s", target)
 	}
 	return nil
 }
@@ -156,6 +165,9 @@ func (m *MappingDefinition) ValidateTransitionTo(target Status) error {
 // Validate checks that this MappingDefinition has all required fields valid.
 // Used for comprehensive validation before JSON marshaling/storage.
 func (m *MappingDefinition) Validate() error {
+	if m == nil {
+		return fmt.Errorf("missing mapping definition")
+	}
 	// Artifact identity
 	if err := validateRequiredField("mapping_identity", m.MappingIdentity); err != nil {
 		return err
@@ -192,93 +204,75 @@ func (m *MappingDefinition) Validate() error {
 		return err
 	}
 
-	// Status
-	if !m.Status.IsValid() {
-		return fmt.Errorf("invalid status: %s", m.Status)
+	for _, field := range []struct{ name, value string }{
+		{"device_fingerprint", m.DeviceFingerprint}, {"device_identity_ref", m.DeviceIdentityRef},
+		{"parser_identity", m.ParserIdentity}, {"differential_report_ref", m.DifferentialReportRef},
+		{"evidence_gate_report_ref", m.EvidenceGateReportRef}, {"evidence_gate_verdict", m.EvidenceGateVerdict},
+	} {
+		if !utf8.ValidString(field.value) {
+			return fmt.Errorf("invalid UTF-8 in %s", field.name)
+		}
 	}
-
-	// CreatedAt
+	for _, ref := range m.EvidenceRefs {
+		if !utf8.ValidString(ref.Type) || !utf8.ValidString(ref.Ref) || !utf8.ValidString(ref.Quote) {
+			return fmt.Errorf("invalid UTF-8 in evidence_refs")
+		}
+	}
 	if m.CreatedAt.IsZero() {
 		return fmt.Errorf("created_at must be set")
 	}
-
-	// If EVIDENCE_APPROVED, must have evidence context
-	if m.Status == StatusEvidenceApproved || m.Status == StatusReplayValidated {
-		if err := validateRequiredField("evidence_gate_report_ref", m.EvidenceGateReportRef); err != nil {
-			return fmt.Errorf("evidence_gate_report_ref required for %s status: %w", m.Status, err)
-		}
-		if len(m.EvidenceRefs) == 0 {
-			return fmt.Errorf("evidence_refs required for %s status", m.Status)
-		}
-		if m.EvidenceApprovedAt.IsZero() {
-			return fmt.Errorf("evidence_approved_at must be set for %s status", m.Status)
-		}
-	}
-
-	// If REPLAY_VALIDATED, must have replay timestamp
-	if m.Status == StatusReplayValidated {
-		if m.ReplayValidatedAt.IsZero() {
-			return fmt.Errorf("replay_validated_at must be set for REPLAY_VALIDATED status")
-		}
-	}
-
-	return nil
+	return m.validateAuthority()
 }
 
-// MarshalJSON implements json.Marshaler.
-func (m *MappingDefinition) MarshalJSON() ([]byte, error) {
+// MarshalJSON reports current authority; serialization is not a credential.
+func (m MappingDefinition) MarshalJSON() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
 	type Alias MappingDefinition
 	return json.Marshal(&struct {
 		*Alias
-		CreatedAt         string `json:"created_at"`
+		Status             Status `json:"status"`
+		CreatedAt          string `json:"created_at"`
 		EvidenceApprovedAt string `json:"evidence_approved_at,omitempty"`
 		ReplayValidatedAt  string `json:"replay_validated_at,omitempty"`
 	}{
-		Alias:             (*Alias)(m),
-		CreatedAt:         m.CreatedAt.Format(time.RFC3339),
+		Alias:              (*Alias)(&m),
+		Status:             m.status,
+		CreatedAt:          m.CreatedAt.Format(time.RFC3339Nano),
 		EvidenceApprovedAt: optionalTimeFormat(m.EvidenceApprovedAt),
 		ReplayValidatedAt:  optionalTimeFormat(m.ReplayValidatedAt),
 	})
 }
 
-// UnmarshalJSON implements json.Unmarshaler.
+// UnmarshalJSON imports candidate data only, atomically; it never restores authority.
 func (m *MappingDefinition) UnmarshalJSON(data []byte) error {
-	type Alias MappingDefinition
-	aux := &struct {
-		CreatedAt         string `json:"created_at"`
-		EvidenceApprovedAt string `json:"evidence_approved_at"`
-		ReplayValidatedAt  string `json:"replay_validated_at"`
-		*Alias
-	}{
-		Alias: (*Alias)(m),
+	if m == nil || !utf8.Valid(data) {
+		return fmt.Errorf("invalid mapping JSON receiver or UTF-8")
 	}
-	if err := json.Unmarshal(data, &aux); err != nil {
+	type Alias MappingDefinition
+	var candidate Alias
+	aux := struct {
+		*Alias
+		Status Status `json:"status"`
+	}{Alias: &candidate}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&aux); err != nil {
 		return err
 	}
-
-	// Parse timestamps
-	createdAt, err := time.Parse(time.RFC3339, aux.CreatedAt)
-	if err != nil {
-		return fmt.Errorf("invalid created_at: %w", err)
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return fmt.Errorf("unexpected trailing mapping JSON")
 	}
-	m.CreatedAt = createdAt
-
-	if aux.EvidenceApprovedAt != "" {
-		approvedAt, err := time.Parse(time.RFC3339, aux.EvidenceApprovedAt)
-		if err != nil {
-			return fmt.Errorf("invalid evidence_approved_at: %w", err)
-		}
-		m.EvidenceApprovedAt = approvedAt
+	if aux.Status != StatusCandidate {
+		return fmt.Errorf("JSON import requires CANDIDATE, got %q", aux.Status)
 	}
-
-	if aux.ReplayValidatedAt != "" {
-		validatedAt, err := time.Parse(time.RFC3339, aux.ReplayValidatedAt)
-		if err != nil {
-			return fmt.Errorf("invalid replay_validated_at: %w", err)
-		}
-		m.ReplayValidatedAt = validatedAt
+	candidate.status = StatusCandidate
+	next := MappingDefinition(candidate)
+	if err := next.Validate(); err != nil {
+		return err
 	}
-
+	*m = next
 	return nil
 }
 
@@ -299,5 +293,5 @@ func optionalTimeFormat(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format(time.RFC3339)
+	return t.Format(time.RFC3339Nano)
 }
