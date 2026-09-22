@@ -34,35 +34,50 @@ func Run(inDir string, evidencePath string) (GateReport, error) {
 
     if evidencePath != "" {
         data, err := os.ReadFile(evidencePath)
-        if err == nil {
+        if err != nil {
+            // Evidence file missing or unreadable: FAIL CLOSED
+            report.Verdict = "REJECTED"
+            report.Status = "REJECTED"
+            report.Evidence = []Evidence{} // explicitly empty, no synthetic data
+        } else {
             var evs []Evidence
-            json.Unmarshal(data, &evs)
-            // jika file bukan array, coba object
-            if len(evs) == 0 {
+            // Try parsing as array first
+            err := json.Unmarshal(data, &evs)
+            // If array parse failed, try single object
+            if err != nil {
                 var single Evidence
-                if json.Unmarshal(data, &single) == nil && single.Type != "" {
-                    evs = append(evs, single)
+                err = json.Unmarshal(data, &single)
+                if err != nil {
+                    // Evidence file is malformed: FAIL CLOSED
+                    report.Verdict = "REJECTED"
+                    report.Status = "REJECTED"
+                    report.Evidence = []Evidence{}
+                } else if single.Type != "" {
+                    evs = []Evidence{single}
+                } else {
+                    // Single object parsed but empty Type: FAIL CLOSED
+                    report.Verdict = "REJECTED"
+                    report.Status = "REJECTED"
+                    report.Evidence = []Evidence{}
                 }
             }
-            report.Evidence = evs
-            if len(evs) >= 2 {
-                report.Verdict = "APPROVED_FOR_MAPPING"
-                report.Status = "MAPPED"
-            } else if len(evs) == 1 {
-                report.Verdict = "NEEDS_MORE_EVIDENCE"
-                report.Status = "NEEDS_EVIDENCE"
-            } else {
+
+            // Only approve if evs was successfully populated with content
+            if len(evs) > 0 {
+                report.Evidence = evs
+                if len(evs) >= 2 {
+                    report.Verdict = "APPROVED_FOR_MAPPING"
+                    report.Status = "MAPPED"
+                } else if len(evs) == 1 {
+                    report.Verdict = "NEEDS_MORE_EVIDENCE"
+                    report.Status = "NEEDS_EVIDENCE"
+                }
+            } else if err == nil && len(evs) == 0 {
+                // Empty array parsed successfully but has no items: FAIL CLOSED
                 report.Verdict = "REJECTED"
                 report.Status = "REJECTED"
+                report.Evidence = []Evidence{}
             }
-        } else {
-            // evidence file tidak ada, buat contoh
-            report.Evidence = []Evidence{
-                {Type: "VENDOR_MANUAL", Ref: "Mindray BeneVision N12 Service Manual p.45", Quote: "Field 2 = Heart Rate"},
-                {Type: "SIMULATOR_LOG", Ref: "captures/session_hr70/sim_log.json"},
-            }
-            report.Verdict = "APPROVED_FOR_MAPPING"
-            report.Status = "MAPPED"
         }
     }
 
