@@ -49,6 +49,7 @@ type MappingDefinition struct {
 	// Status & Timestamps
 	status               Status
 	approval             *evidenceApproval
+	replay               *replayApproval
 	CreatedAt            time.Time `json:"created_at"`             // when MappingDefinition was created
 	EvidenceApprovedAt   time.Time `json:"evidence_approved_at,omitempty"`   // when Evidence Gate approved
 	ReplayValidatedAt    time.Time `json:"replay_validated_at,omitempty"`    // when Replay validated

@@ -110,7 +110,7 @@ func TestNoGroundTruthForbidsZeroProof(t *testing.T) {
 	}
 }
 
-// Test E: known fixture with explicit expected ground truth and matching actual result → measured false_data_count = 0 → READY
+// Test E: explicit matching ground truth proves measurement, not mapping authority.
 func TestValidFixtureWithGroundTruthMatching(t *testing.T) {
 	tmpDir := t.TempDir()
 	rawPath := filepath.Join(tmpDir, "raw_stream.bin")
@@ -126,8 +126,8 @@ func TestValidFixtureWithGroundTruthMatching(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	// Write ground truth: empty (no expectations, meaning all data is valid)
-	groundTruth := map[string]int{}
+	// Explicit measured expectation; empty expectations cannot prove a match.
+	groundTruth := map[string]int{"HR": 88}
 	gtData, _ := json.Marshal(groundTruth)
 	err = os.WriteFile(gtPath, gtData, 0644)
 	if err != nil {
@@ -148,8 +148,8 @@ func TestValidFixtureWithGroundTruthMatching(t *testing.T) {
 	if report.FalseData != 0 {
 		t.Errorf("no mismatches: expected false_data = 0, got %d", report.FalseData)
 	}
-	if report.Verdict != "READY_FOR_PROFILE_BUILDER" {
-		t.Errorf("valid matching data: expected READY_FOR_PROFILE_BUILDER, got %s", report.Verdict)
+	if report.Verdict != "MEASURED_MATCH" {
+		t.Errorf("matching data without mapping: expected MEASURED_MATCH, got %s", report.Verdict)
 	}
 }
 
@@ -183,12 +183,9 @@ func TestFixtureWithGroundTruthMismatch(t *testing.T) {
 	if report.GroundTruthProvided != true {
 		t.Error("ground truth should be marked as provided")
 	}
-	// This data has no OBX segment (no observations), so we can't verify ground truth
-	// Frames parse OK but there are no observation values to check
-	// With no OBX segments, false_data won't be incremented, so READY is returned
-	// This is actually correct - MSH and PID segments parse fine, no OBX means nothing to check
-	if report.FalseData != 0 {
-		t.Errorf("no OBX segment: expected false_data=0 (no observations to check), got %d", report.FalseData)
+	// No observation means no measured proof, even when headers parse correctly.
+	if report.FalseData == 0 || report.Compared != 0 || report.Verdict != "FAIL_FALSE_DATA" {
+		t.Fatalf("missing actual observation must fail closed: %+v", report)
 	}
 }
 
@@ -320,8 +317,8 @@ func TestGroundTruthValueMatch_HR88(t *testing.T) {
 	if report.FalseData != 0 {
 		t.Errorf("HR=88 matches expected HR=88: expected false_data=0, got %d", report.FalseData)
 	}
-	if report.Verdict != "READY_FOR_PROFILE_BUILDER" {
-		t.Errorf("matching values: expected READY_FOR_PROFILE_BUILDER, got %s", report.Verdict)
+	if report.Verdict != "MEASURED_MATCH" {
+		t.Errorf("matching values without mapping: expected MEASURED_MATCH, got %s", report.Verdict)
 	}
 }
 
@@ -403,37 +400,37 @@ func TestExtractObservationValues(t *testing.T) {
 		name     string
 		hl7      string
 		wantKeys []string
-		wantVals map[string]int
+		wantVals map[string]float64
 	}{
 		{
-			name: "single OBX with HR",
-			hl7:  "MSH|^~\\&|SendApp|SendFac|RecvApp|RecvFac|20260101||ADT^A01|001|P|2.5\nOBX|1|NM|HR^Heart Rate||88|bpm|60-100|N||",
+			name:     "single OBX with HR",
+			hl7:      "MSH|^~\\&|SendApp|SendFac|RecvApp|RecvFac|20260101||ADT^A01|001|P|2.5\nOBX|1|NM|HR^Heart Rate||88|bpm|60-100|N||",
 			wantKeys: []string{"HR"},
-			wantVals: map[string]int{"HR": 88},
+			wantVals: map[string]float64{"HR": 88},
 		},
 		{
-			name: "multiple OBX segments",
-			hl7:  "OBX|1|NM|HR^Heart Rate||88|bpm|60-100|N||\nOBX|2|NM|SpO2^Oxygen||97|%|95-100|N||",
+			name:     "multiple OBX segments",
+			hl7:      "OBX|1|NM|HR^Heart Rate||88|bpm|60-100|N||\nOBX|2|NM|SpO2^Oxygen||97|%|95-100|N||",
 			wantKeys: []string{"HR", "SpO2"},
-			wantVals: map[string]int{"HR": 88, "SpO2": 97},
+			wantVals: map[string]float64{"HR": 88, "SpO2": 97},
 		},
 		{
-			name: "OBX with float value truncates",
-			hl7:  "OBX|1|NM|HR^Heart Rate||88.7|bpm|60-100|N||",
+			name:     "OBX preserves decimal value",
+			hl7:      "OBX|1|NM|HR^Heart Rate||88.7|bpm|60-100|N||",
 			wantKeys: []string{"HR"},
-			wantVals: map[string]int{"HR": 88},
+			wantVals: map[string]float64{"HR": 88.7},
 		},
 		{
-			name: "OBX with non-numeric value",
-			hl7:  "OBX|1|NM|HR^Heart Rate||UNKNOWN|bpm|60-100|N||",
+			name:     "OBX with non-numeric value",
+			hl7:      "OBX|1|NM|HR^Heart Rate||UNKNOWN|bpm|60-100|N||",
 			wantKeys: []string{},
-			wantVals: map[string]int{},
+			wantVals: map[string]float64{},
 		},
 		{
-			name: "missing OBX value field",
-			hl7:  "OBX|1|NM|HR^Heart Rate||",
+			name:     "missing OBX value field",
+			hl7:      "OBX|1|NM|HR^Heart Rate||",
 			wantKeys: []string{},
-			wantVals: map[string]int{},
+			wantVals: map[string]float64{},
 		},
 	}
 
@@ -447,7 +444,7 @@ func TestExtractObservationValues(t *testing.T) {
 				if !found {
 					t.Errorf("expected key %q not found", key)
 				} else if val != tt.wantVals[key] {
-					t.Errorf("key %q: expected %d, got %d", key, tt.wantVals[key], val)
+					t.Errorf("key %q: expected %g, got %g", key, tt.wantVals[key], val)
 				}
 			}
 

@@ -35,22 +35,28 @@ func (m *MappingDefinition) Claim() evidence.Claim {
 func (m *MappingDefinition) validateAuthority() error {
 	switch m.status {
 	case StatusCandidate:
-		if m.approval != nil || m.EvidenceGateReportRef != "" || m.EvidenceGateVerdict != "" ||
+		if m.approval != nil || m.replay != nil || m.EvidenceGateReportRef != "" || m.EvidenceGateVerdict != "" ||
 			!m.EvidenceApprovedAt.IsZero() || !m.ReplayValidatedAt.IsZero() {
 			return fmt.Errorf("CANDIDATE contains approval metadata")
 		}
-	case StatusEvidenceApproved:
+	case StatusEvidenceApproved, StatusReplayValidated:
 		a := m.approval
 		if a == nil || m.Claim() != a.claim || m.Provenance != a.provenance ||
 			m.ProvenanceAuthor != a.author || m.DifferentialReportRef != a.differentialRef ||
 			!m.CreatedAt.Equal(a.createdAt) || m.EvidenceGateReportRef != a.reportRef ||
 			m.EvidenceGateVerdict != evidence.ApprovedForMapping ||
-			!m.EvidenceApprovedAt.Equal(a.approvedAt) || !m.ReplayValidatedAt.IsZero() ||
-			!slices.Equal(m.EvidenceRefs, a.refs) {
+			!m.EvidenceApprovedAt.Equal(a.approvedAt) || !slices.Equal(m.EvidenceRefs, a.refs) {
 			return fmt.Errorf("evidence authority missing or approved definition modified")
 		}
+		if m.status == StatusEvidenceApproved {
+			if m.replay != nil || !m.ReplayValidatedAt.IsZero() {
+				return fmt.Errorf("EVIDENCE_APPROVED contains replay authority metadata")
+			}
+		} else if m.replay == nil || m.replay.claim != a.claim || m.replay.validatedAt.IsZero() ||
+			!m.ReplayValidatedAt.Equal(m.replay.validatedAt) {
+			return fmt.Errorf("replay authority missing or validated definition modified")
+		}
 	default:
-		// ponytail: only Evidence Gate authority exists; Replay authority belongs to D3E.
 		return fmt.Errorf("unsupported authoritative status: %q", m.status)
 	}
 	return nil

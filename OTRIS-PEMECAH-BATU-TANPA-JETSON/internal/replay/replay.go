@@ -1,384 +1,305 @@
-
 package replay
 
 import (
-    "encoding/json"
-    "fmt"
-    "os"
-    "path/filepath"
-    "strings"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/otris-id/otris-pemecah-batu/internal/evidence"
 )
 
 type Report struct {
-    SessionID string `json:"session_id"`
-    ReplayCount int `json:"replay_count"`
-    Parser string `json:"parser"`
-    Mapping string `json:"mapping"`
-    Success int `json:"success"`
-    FailedParse int `json:"failed_parse"`
-    FalseData int `json:"false_data"`
-    FalseDataRate float64 `json:"false_data_rate"`
-    Verdict string `json:"verdict"`
-    GroundTruthProvided bool `json:"ground_truth_provided"`
-    Notes string `json:"notes,omitempty"`
+	SessionID           string          `json:"session_id"`
+	ReplayCount         int             `json:"replay_count"`
+	Parser              string          `json:"parser"`
+	Mapping             string          `json:"mapping"`
+	MappingVersion      string          `json:"mapping_version"`
+	Claim               *evidence.Claim `json:"claim,omitempty"`
+	Success             int             `json:"success"`
+	FailedParse         int             `json:"failed_parse"`
+	Compared            int             `json:"compared"`
+	FalseData           int             `json:"false_data"`
+	FalseDataRate       float64         `json:"false_data_rate"`
+	Verdict             string          `json:"verdict"`
+	GroundTruthProvided bool            `json:"ground_truth_provided"`
+	Notes               string          `json:"notes,omitempty"`
 }
 
-// ReplayOptions allows passing ground truth for comparison
 type ReplayOptions struct {
-    GroundTruthPath string // optional file with expected values
+	GroundTruthPath string // Explicit numeric expectations; never inferred.
 }
 
 func Run(inDir string, count int) (Report, error) {
-    return RunWithOptions(inDir, count, ReplayOptions{})
+	return RunWithOptions(inDir, count, ReplayOptions{})
 }
 
+// RunWithOptions measures source-code expectations without granting mapping authority.
 func RunWithOptions(inDir string, count int, opts ReplayOptions) (Report, error) {
-    if count <=0 { count = 1000 }
-    rawPath := filepath.Join(inDir, "raw_stream.bin")
-    data, err := os.ReadFile(rawPath)
-
-    // Missing input: FAIL CLOSED
-    if err != nil {
-        report := Report{
-            SessionID: filepath.Base(inDir),
-            ReplayCount: count,
-            Parser: "generic_hl7_v2",
-            Mapping: "mindray_n12_mapping_v0.1",
-            Success: 0,
-            FailedParse: 0,
-            FalseData: 0,
-            FalseDataRate: 0.0,
-            Verdict: "NOT_READY",
-            GroundTruthProvided: false,
-            Notes: "missing raw_stream.bin file",
-        }
-        return report, nil
-    }
-
-    // Unreadable or malformed input: FAIL CLOSED
-    if len(data) == 0 {
-        report := Report{
-            SessionID: filepath.Base(inDir),
-            ReplayCount: count,
-            Parser: "generic_hl7_v2",
-            Mapping: "mindray_n12_mapping_v0.1",
-            Success: 0,
-            FailedParse: 0,
-            FalseData: 0,
-            FalseDataRate: 0.0,
-            Verdict: "NOT_READY",
-            GroundTruthProvided: false,
-            Notes: "raw_stream.bin is empty",
-        }
-        return report, nil
-    }
-
-    // framing sederhana: split newline atau MLLP
-    frames := splitFrames(data)
-
-    if len(frames) == 0 {
-        report := Report{
-            SessionID: filepath.Base(inDir),
-            ReplayCount: count,
-            Parser: "generic_hl7_v2",
-            Mapping: "mindray_n12_mapping_v0.1",
-            Success: 0,
-            FailedParse: 0,
-            FalseData: 0,
-            FalseDataRate: 0.0,
-            Verdict: "NOT_READY",
-            GroundTruthProvided: false,
-            Notes: "no valid frames after parsing",
-        }
-        return report, nil
-    }
-
-    success := 0
-    failed := 0
-    falseData := 0
-    groundTruthProvided := false
-
-    // Load ground truth if provided
-    var expectedCounts map[string]int
-    if opts.GroundTruthPath != "" {
-        gtData, err := os.ReadFile(opts.GroundTruthPath)
-        if err == nil && len(gtData) > 0 {
-            groundTruthProvided = true
-            json.Unmarshal(gtData, &expectedCounts)
-        }
-    }
-
-    // replay count kali
-    for i:=0; i<count; i++ {
-        for _, fr := range frames {
-            text := string(fr)
-            text = strings.TrimSpace(text)
-
-            // FAIL CLOSED: empty frame is a failure, never silently skip
-            if len(text) == 0 {
-                failed++
-                continue
-            }
-
-            // Improved parser: validate HL7 structure
-            // HL7 must have: MSH segment, field separators (|), at least 3 fields
-            if validateHL7Frame(text) {
-                success++
-
-                // Only measure false data if we have ground truth to compare against
-                // AND this is an observation segment (OBX) where we can extract values
-                if groundTruthProvided && expectedCounts != nil {
-                    // Only check ground truth for OBX segments
-                    // Skip header segments (MSH, PID) which don't contain observation values
-                    if isObservationSegment(text) {
-                        if !matchesGroundTruth(text, expectedCounts) {
-                            falseData++
-                        }
-                    }
-                }
-            } else {
-                failed++
-            }
-        }
-    }
-
-    total := success + failed
-    rate := 0.0
-    if total>0 { rate = float64(falseData)/float64(total) }
-
-    verdict := "NOT_READY"
-    notes := ""
-
-    // Fail closed: only READY if conditions are met
-    if total > 0 && failed == 0 {
-        // All frames parsed successfully
-        if groundTruthProvided {
-            // Ground truth provided: check false_data count
-            if falseData == 0 {
-                verdict = "READY_FOR_PROFILE_BUILDER"
-            } else {
-                verdict = "FAIL_FALSE_DATA"
-                notes = fmt.Sprintf("measured false_data > 0: %d/%d", falseData, total)
-            }
-        } else {
-            // No ground truth: cannot claim false_data = 0 is proven
-            verdict = "NOT_PROVEN"
-            notes = "no ground truth provided; cannot measure false_data reliably"
-        }
-    } else if failed > 0 {
-        verdict = "NOT_READY"
-        notes = fmt.Sprintf("parse failures detected: %d/%d", failed, total)
-    }
-
-    report := Report{
-        SessionID: filepath.Base(inDir),
-        ReplayCount: count,
-        Parser: "generic_hl7_v2",
-        Mapping: "mindray_n12_mapping_v0.1",
-        Success: success,
-        FailedParse: failed,
-        FalseData: falseData,
-        FalseDataRate: rate,
-        Verdict: verdict,
-        GroundTruthProvided: groundTruthProvided,
-        Notes: notes,
-    }
-
-    outPath := filepath.Join(inDir, fmt.Sprintf("replay_report_%d.json", count))
-    f, _ := os.Create(outPath)
-    enc := json.NewEncoder(f)
-    enc.SetIndent("", "  ")
-    enc.Encode(report)
-    f.Close()
-    fmt.Printf("[PB-12] REPLAY LAB selesai: %d replay, success=%d failed=%d false_data=%d rate=%.4f verdict=%s\n", count, success, failed, falseData, rate, verdict)
-    return report, nil
+	if count <= 0 {
+		count = 1000
+	}
+	report, err := run(inDir, count, opts, nil)
+	if err != nil {
+		return report, err
+	}
+	if err := WriteReport(filepath.Join(inDir, fmt.Sprintf("replay_report_%d.json", count)), report); err != nil {
+		report.Verdict = "NOT_READY"
+		return report, err
+	}
+	return report, nil
 }
 
-// isObservationSegment checks if frame is an OBX (observation) segment
-// Only OBX segments contain observation values for ground truth comparison
+// MeasureClaim returns fresh measured data, NOT authority or Profile Builder readiness.
+// Mapping's governor checks Evidence approval before calling this function.
+// Ground truth must contain exactly this claim's canonical concept and its numeric value.
+func MeasureClaim(claim evidence.Claim, inDir string, count int, opts ReplayOptions) (Report, error) {
+	return run(inDir, count, opts, &claim)
+}
+
+func run(inDir string, count int, opts ReplayOptions, claim *evidence.Claim) (Report, error) {
+	report := Report{
+		SessionID: filepath.Base(inDir), ReplayCount: count,
+		Parser: "generic_hl7_v2", Verdict: "NOT_READY", Claim: claim,
+	}
+	if claim != nil {
+		report.Mapping, report.MappingVersion = claim.MappingIdentity, claim.MappingVersion
+		report.Parser = claim.ParserIdentity
+		if count <= 0 || strings.TrimSpace(claim.MappingIdentity) == "" || strings.TrimSpace(claim.MappingVersion) == "" {
+			return report, errors.New("claim replay requires identity, version and positive replay count")
+		}
+		// ponytail: numeric HL7 OBX-5 with identical units only. Add explicit parser
+		// or conversion support before accepting other claims; never guess semantics.
+		if claim.SourceProtocol != "HL7_V2" || claim.ParserIdentity != "generic_hl7_v2" ||
+			claim.SourcePosition != 5 || strings.TrimSpace(claim.SourceCode) == "" ||
+			strings.TrimSpace(claim.SourceUnit) == "" || claim.SourceUnit != claim.CanonicalUnit ||
+			strings.TrimSpace(claim.CanonicalConcept) == "" {
+			return report, errors.New("unsupported explicit replay claim")
+		}
+	}
+
+	var expected map[string]float64
+	if opts.GroundTruthPath != "" {
+		var err error
+		expected, err = readGroundTruth(opts.GroundTruthPath)
+		if err != nil {
+			return report, err
+		}
+		report.GroundTruthProvided = true
+	}
+	if claim != nil {
+		if _, ok := expected[claim.CanonicalConcept]; !ok || len(expected) != 1 {
+			return report, errors.New("ground truth must explicitly supply exactly the claimed canonical concept")
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(inDir, "raw_stream.bin"))
+	if err != nil || len(data) == 0 {
+		report.Notes = "missing, unreadable or empty raw_stream.bin"
+		return report, nil
+	}
+	frames := splitFrames(data)
+	for i := 0; i < count; i++ {
+		comparedBefore := report.Compared
+		for _, frame := range frames {
+			text := strings.ReplaceAll(string(frame), "\r\n", "\n")
+			text = strings.ReplaceAll(text, "\r", "\n")
+			for _, segment := range strings.Split(strings.TrimSpace(text), "\n") {
+				segment = strings.TrimSpace(segment)
+				if !validateHL7Frame(segment) {
+					report.FailedParse++
+					continue
+				}
+				report.Success++
+				if !report.GroundTruthProvided || !isObservationSegment(segment) {
+					continue
+				}
+				if claim == nil {
+					report.Compared++
+					if !matchesGroundTruth(segment, expected) {
+						report.FalseData++
+					}
+					continue
+				}
+				fields := strings.Split(segment, "|")
+				if len(fields) <= 3 || strings.SplitN(fields[3], "^", 2)[0] != claim.SourceCode {
+					continue
+				}
+				report.Compared++
+				if len(fields) <= 6 || fields[2] != "NM" || fields[6] != claim.SourceUnit {
+					report.FalseData++
+					continue
+				}
+				actual, err := parseNumericValue(fields[claim.SourcePosition])
+				if err != nil || actual != expected[claim.CanonicalConcept] {
+					report.FalseData++
+				}
+			}
+		}
+		if report.GroundTruthProvided && report.Compared == comparedBefore {
+			report.FalseData++ // Missing actual observation is not a zero-error proof.
+		}
+	}
+	total := report.Success + report.FailedParse
+	if total > 0 {
+		report.FalseDataRate = float64(report.FalseData) / float64(total)
+	}
+	switch {
+	case total == 0 || report.FailedParse > 0:
+		report.Notes = fmt.Sprintf("parse failures detected: %d/%d", report.FailedParse, total)
+	case !report.GroundTruthProvided:
+		report.Verdict, report.Notes = "NOT_PROVEN", "no explicit ground truth; false_data is not proven"
+	case report.FalseData > 0:
+		report.Verdict = "FAIL_FALSE_DATA"
+		report.Notes = fmt.Sprintf("measured false_data > 0: %d/%d", report.FalseData, total)
+	case report.Compared > 0:
+		report.Verdict = "MEASURED_MATCH"
+	}
+	return report, nil
+}
+
+func readGroundTruth(path string) (map[string]float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read ground truth: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	start, err := dec.Token()
+	if err != nil || start != json.Delim('{') {
+		return nil, errors.New("ground truth must be a numeric expectation object")
+	}
+	expected := make(map[string]float64)
+	for dec.More() {
+		token, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("decode ground truth key: %w", err)
+		}
+		key, ok := token.(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			return nil, errors.New("invalid ground truth key")
+		}
+		if _, exists := expected[key]; exists {
+			return nil, fmt.Errorf("duplicate ground truth key %q", key)
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, fmt.Errorf("decode ground truth value: %w", err)
+		}
+		number, err := parseNumericValue(string(value))
+		if err != nil {
+			return nil, fmt.Errorf("invalid ground truth value for %q", key)
+		}
+		expected[key] = number
+	}
+	if end, err := dec.Token(); err != nil || end != json.Delim('}') || len(expected) == 0 {
+		return nil, errors.New("ground truth requires complete nonempty expectations")
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("trailing ground truth data")
+	}
+	return expected, nil
+}
+
+// WriteReport persists provenance only; no caller-supplied report grants authority.
+// Never overwrite inputs or an existing report, including a symlink.
+func WriteReport(path string, report Report) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("create replay report: %w", err)
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := errors.Join(enc.Encode(report), f.Close()); err != nil {
+		return errors.Join(fmt.Errorf("write replay report: %w", err), os.Remove(path))
+	}
+	return nil
+}
+
 func isObservationSegment(text string) bool {
-    text = strings.TrimSpace(text)
-    if len(text) < 3 {
-        return false
-    }
-
-    segmentCode := text[0:3]
-    return segmentCode == "OBX"
+	return strings.HasPrefix(strings.TrimSpace(text), "OBX|")
 }
 
-// validateHL7Frame checks basic HL7 v2 structure
-// HL7 segments start with 3-letter code (MSH, PID, OBX, etc.)
-// Fields separated by |, subfields by ^
 func validateHL7Frame(text string) bool {
-    text = strings.TrimSpace(text)
-
-    // Minimum HL7 frame: "MSH|..." (at least 4 chars)
-    if len(text) < 4 {
-        return false
-    }
-
-    // Check for segment separator (|)
-    if !strings.Contains(text, "|") {
-        return false
-    }
-
-    // Check if it starts with a 3-letter segment code
-    // (MSH, PID, OBX, etc.)
-    if len(text) < 3 {
-        return false
-    }
-
-    segmentCode := text[0:3]
-    // Basic validation: segment code should be uppercase letters
-    for _, c := range segmentCode {
-        if c < 'A' || c > 'Z' {
-            return false
-        }
-    }
-
-    return true
+	text = strings.TrimSpace(text)
+	if len(text) < 4 || text[3] != '|' {
+		return false
+	}
+	for _, c := range text[:3] {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
-// matchesGroundTruth compares ACTUAL EXTRACTED VALUES against expected ground truth
-// Parses HL7 frames to extract observation values (HR, SpO2, etc.)
-// Compares them numerically with ground truth expectations
-// Returns: true = all values match, false = any value mismatch or unextractable
-func matchesGroundTruth(text string, expected map[string]int) bool {
-    // If no expectations defined, consider it a match
-    if len(expected) == 0 {
-        return true
-    }
-
-    // Extract actual values from HL7 frame
-    actualValues := extractObservationValues(text)
-
-    // Compare each expected value with actual extracted value
-    for fieldName, expectedValue := range expected {
-        actualValue, found := actualValues[fieldName]
-
-        if !found {
-            // Expected field not found in frame = mismatch (FAIL CLOSED)
-            return false
-        }
-
-        // Value found: compare numerically
-        if actualValue != expectedValue {
-            // Value mismatch: actual != expected = FALSE DATA
-            return false
-        }
-    }
-
-    return true
+func matchesGroundTruth(text string, expected map[string]float64) bool {
+	if len(expected) == 0 {
+		return false
+	}
+	actual := extractObservationValues(text)
+	for field, value := range expected {
+		if got, ok := actual[field]; !ok || got != value {
+			return false
+		}
+	}
+	return true
 }
 
-// extractObservationValues parses HL7 frame and extracts observation field values
-// HL7 OBX segment format: OBX|seq|type|observation_id||value|units|...
-// Extracts numeric values and maps them to field names
-// If a value cannot be parsed as int, that field is not included (mismatch if expected)
-func extractObservationValues(text string) map[string]int {
-    values := make(map[string]int)
-
-    // Split into segments (handle both single-line and multi-segment)
-    lines := strings.Split(text, "\n")
-
-    for _, line := range lines {
-        line = strings.TrimSpace(line)
-        if len(line) == 0 {
-            continue
-        }
-
-        // Parse HL7 segment by pipe delimiter
-        fields := strings.Split(line, "|")
-        if len(fields) == 0 {
-            continue
-        }
-
-        segmentType := fields[0]
-
-        // OBX segment: observation value
-        // Format: OBX|1|NM|HR^Heart Rate||88|bpm|60-100|N||
-        // Field [3] = observation code (e.g., "HR^Heart Rate")
-        // Field [5] = value (e.g., "88")
-        if segmentType == "OBX" && len(fields) > 5 {
-            observationCode := fields[3]
-            valueStr := fields[5]
-
-            // Extract field name from observation code
-            // "HR^Heart Rate" -> use "HR" as field name
-            codeParts := strings.Split(observationCode, "^")
-            if len(codeParts) > 0 && codeParts[0] != "" {
-                fieldName := codeParts[0]
-
-                // Parse value as integer
-                value, err := parseIntValue(valueStr)
-                if err == nil {
-                    values[fieldName] = value
-                }
-                // If can't parse int, field is omitted (will cause mismatch if expected)
-            }
-        }
-    }
-
-    return values
+func extractObservationValues(text string) map[string]float64 {
+	values := make(map[string]float64)
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), "|")
+		if fields[0] != "OBX" || len(fields) <= 5 {
+			continue
+		}
+		code := strings.SplitN(fields[3], "^", 2)[0]
+		value, err := parseNumericValue(fields[5])
+		if code != "" && err == nil {
+			values[code] = value
+		}
+	}
+	return values
 }
 
-// parseIntValue parses numeric strings to integers
-// Handles: "88", " 88 ", "88.5" (truncates), etc.
-// Returns error if cannot parse
-func parseIntValue(s string) (int, error) {
-    s = strings.TrimSpace(s)
-    if s == "" {
-        return 0, fmt.Errorf("empty value")
-    }
-
-    // Try integer first
-    var val int
-    _, err := fmt.Sscanf(s, "%d", &val)
-    if err == nil {
-        return val, nil
-    }
-
-    // Try float and truncate
-    var fval float64
-    _, err = fmt.Sscanf(s, "%f", &fval)
-    if err == nil {
-        return int(fval), nil
-    }
-
-    return 0, fmt.Errorf("cannot parse: %s", s)
+// Preserve fractional values; reject non-HL7 syntax and non-finite numbers.
+// HL7 NM: optional sign, digits, optional decimal point and digits only.
+func parseNumericValue(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty numeric value")
+	}
+	// Reject Go-only numeric syntax: 0x prefix, underscores, exponent notation.
+	for _, substr := range []string{"0x", "0X", "0o", "0O", "0b", "0B", "_", "e", "E"} {
+		if strings.Contains(s, substr) {
+			return 0, fmt.Errorf("non-HL7 numeric syntax: %q", s)
+		}
+	}
+	value, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("invalid numeric value: %q", s)
+	}
+	return value, nil
 }
 
 func splitFrames(data []byte) [][]byte {
-    // MLLP
-    if contains(data, 0x0B) {
-        frames := [][]byte{}
-        start := -1
-        for i:=0; i<len(data)-1; i++ {
-            if data[i]==0x0B { start=i+1 }
-            if data[i]==0x1C && data[i+1]==0x0D && start!=-1 {
-                frames = append(frames, data[start:i])
-                start=-1
-            }
-        }
-        if len(frames)>0 { return frames }
-    }
-    // NEWLINE: preserve all frames including empty ones for proper failure tracking
-    lines := [][]byte{}
-    cur := []byte{}
-    for _, b := range data {
-        if b=='\n' {
-            // Add frame (even if empty) to preserve failures
-            lines = append(lines, cur)
-            cur=[]byte{}
-        } else {
-            cur = append(cur, b)
-        }
-    }
-    if len(cur)>0 { lines = append(lines, cur) }
-    return lines
-}
-
-func contains(data []byte, b byte) bool {
-    for _, v := range data { if v==b { return true } }
-    return false
+	if bytes.Contains(data, []byte{0x0B}) {
+		var frames [][]byte
+		for len(data) > 0 {
+			end := bytes.Index(data, []byte{0x1C, 0x0D})
+			if data[0] != 0x0B || end < 1 || bytes.Contains(data[1:end], []byte{0x0B}) {
+				return [][]byte{nil} // Do not discard malformed MLLP or its trailing data.
+			}
+			frames = append(frames, data[1:end])
+			data = bytes.Trim(data[end+2:], "\r\n")
+		}
+		return frames
+	}
+	// Preserve interior empty frames; a final line terminator is not a frame.
+	return bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'})
 }
