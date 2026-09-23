@@ -3,10 +3,12 @@ package main
 
 import (
     "encoding/json"
+    "errors"
     "fmt"
     "os"
     "time"
 
+    "github.com/otris-id/otris-pemecah-batu/internal/approval"
     "github.com/otris-id/otris-pemecah-batu/internal/auth"
 	"github.com/otris-id/otris-pemecah-batu/internal/capture"
 	"github.com/otris-id/otris-pemecah-batu/internal/license"
@@ -20,6 +22,7 @@ import (
     "github.com/otris-id/otris-pemecah-batu/internal/inspector"
     "github.com/otris-id/otris-pemecah-batu/internal/mapping"
     "github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
+    "github.com/otris-id/otris-pemecah-batu/internal/registry"
     "github.com/otris-id/otris-pemecah-batu/internal/replay"
     "github.com/spf13/cobra"
 )
@@ -27,6 +30,12 @@ import (
 func main() {
 	auth.Check()
 	license.CheckMaintenance()
+    if err := newRootCommand().Execute(); err != nil {
+        os.Exit(1)
+    }
+}
+
+func newRootCommand() *cobra.Command {
     rootCmd := &cobra.Command{
         Use: "WIJOYO_KUSUMO",
         Short: "OTRIS WIJOYO KUSUMO - Universal Integration Workbench (Wakaf) PB-01 s/d PB-13",
@@ -196,8 +205,11 @@ Hukum:
 
 Requires explicit MappingDefinition JSON file (CANDIDATE status only; authority restored fresh via ReviewEvidence and ReviewReplay).
 
-All flags are mandatory except --count (default 1000).`,
-        Run: func(cmd *cobra.Command, args []string) {
+Profile flags are mandatory except --count (default 1000).
+Admission is optional: supplying any of --approver, --decision, --issuer-key,
+--issuer-key-id or --sequence requires all five. Decision must be APPROVE or REJECT.
+Admission requires a new --out directory; approval.json is audit data only.`,
+        RunE: func(cmd *cobra.Command, args []string) (runErr error) {
             mappingPath, _ := cmd.Flags().GetString("mapping")
             evidencePath, _ := cmd.Flags().GetString("evidence")
             inputDir, _ := cmd.Flags().GetString("input")
@@ -209,6 +221,30 @@ All flags are mandatory except --count (default 1000).`,
             model, _ := cmd.Flags().GetString("model")
             transport, _ := cmd.Flags().GetString("transport")
             firmwareTested, _ := cmd.Flags().GetString("firmware")
+
+            // D3J governed handoff: supplying any admission flag makes all of them
+            // mandatory. With none supplied, D3G behavior below is unchanged.
+            approverFlag, _ := cmd.Flags().GetString("approver")
+            decisionFlag, _ := cmd.Flags().GetString("decision")
+            issuerKeyFlag, _ := cmd.Flags().GetString("issuer-key")
+            issuerKeyIDFlag, _ := cmd.Flags().GetString("issuer-key-id")
+            sequenceFlag, _ := cmd.Flags().GetUint64("sequence")
+            admission := admissionInputs{
+                approver: approverFlag, decision: decisionFlag, issuerKeyPath: issuerKeyFlag,
+                issuerKeyID: issuerKeyIDFlag, sequence: sequenceFlag,
+            }
+            admissionMode := false
+            for _, name := range []string{"approver", "decision", "issuer-key", "issuer-key-id", "sequence"} {
+                admissionMode = admissionMode || cmd.Flags().Changed(name)
+            }
+            if admissionMode {
+                if err := admission.validate(); err != nil {
+                    return fmt.Errorf("[D3J] GOVERNED HANDOFF FAILED: %w", err)
+                }
+                if err := requireNewOutput(outDir); err != nil {
+                    return fmt.Errorf("[D3J] GOVERNED HANDOFF FAILED: %w", err)
+                }
+            }
 
             // Validate required flags
             for name, val := range map[string]string{
@@ -224,8 +260,7 @@ All flags are mandatory except --count (default 1000).`,
                 "--firmware": firmwareTested,
             } {
                 if val == "" {
-                    fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: missing required flag %s\n", name)
-                    os.Exit(1)
+                    return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: missing required flag %s", name)
                 }
             }
             if count <= 0 {
@@ -238,20 +273,17 @@ All flags are mandatory except --count (default 1000).`,
             fmt.Printf("[D3G-1] Loading MappingDefinition from %s\n", mappingPath)
             mappingData, err := os.ReadFile(mappingPath)
             if err != nil {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: cannot read mapping file: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: cannot read mapping file: %w", err)
             }
 
             m := &mapping.MappingDefinition{}
             if err := json.Unmarshal(mappingData, m); err != nil {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: invalid MappingDefinition JSON: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: invalid MappingDefinition JSON: %w", err)
             }
 
             status, err := m.Status()
             if err != nil || status != mapping.StatusCandidate {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: MappingDefinition must be CANDIDATE, got %s: %v\n", status, err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: MappingDefinition must be CANDIDATE, got %s: %v", status, err)
             }
             fmt.Printf("[D3G-1] MappingDefinition loaded: %s/%s CANDIDATE\n", m.MappingIdentity, m.MappingVersion)
 
@@ -259,15 +291,13 @@ All flags are mandatory except --count (default 1000).`,
             fmt.Printf("[D3G-2] Reviewing evidence from %s\n", evidencePath)
             evidenceReportPath := inputDir + "/governed_evidence_report.json"
             if err := mapping.ReviewEvidence(m, evidencePath, evidenceReportPath); err != nil {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: evidence review rejected: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: evidence review rejected: %w", err)
             }
 
             // Verify status transitioned to EVIDENCE_APPROVED
             status, err = m.Status()
             if err != nil || status != mapping.StatusEvidenceApproved {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: evidence approval did not transition status, got %s: %v\n", status, err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: evidence approval did not transition status, got %s: %v", status, err)
             }
             fmt.Printf("[D3G-2] Evidence approved: %s\n", evidenceReportPath)
 
@@ -277,34 +307,60 @@ All flags are mandatory except --count (default 1000).`,
             replayOpts := replay.ReplayOptions{GroundTruthPath: groundTruthPath}
             replayReport, err := mapping.ReviewReplay(m, inputDir, count, replayOpts, replayReportPath)
             if err != nil {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay validation rejected: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: replay validation rejected: %w", err)
             }
 
             // Verify status transitioned to REPLAY_VALIDATED and report verdict
             status, err = m.Status()
             if err != nil || status != mapping.StatusReplayValidated {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay validation did not transition status, got %s: %v\n", status, err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: replay validation did not transition status, got %s: %v", status, err)
             }
             if replayReport.Verdict != "READY_FOR_PROFILE_BUILDER" {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay verdict is %s, expected READY_FOR_PROFILE_BUILDER\n", replayReport.Verdict)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: replay verdict is %s, expected READY_FOR_PROFILE_BUILDER", replayReport.Verdict)
             }
             fmt.Printf("[D3G-3] Replay validated: %s (false_data=%.1f)\n", replayReportPath, replayReport.FalseDataRate)
 
-            // Step 4: BuildFromMappingDefinition - construct Integration Profile Candidate
+            // Step 4: Build into private sibling staging only in admission mode.
+            buildDir := outDir
+            if admissionMode {
+                stagingDir, err := newStagingDir(outDir)
+                if err != nil {
+                    return fmt.Errorf("[D3J] GOVERNED HANDOFF FAILED: %w", err)
+                }
+                // RunE returns before main exits, so cleanup runs on every failure.
+                defer func() {
+                    if runErr == nil {
+                        return // Successful rename already consumed staging.
+                    }
+                    if err := os.RemoveAll(stagingDir); err != nil {
+                        runErr = errors.Join(runErr, fmt.Errorf("cleanup staging: %w", err))
+                    }
+                }()
+                buildDir = stagingDir
+            }
             fmt.Printf("[D3G-4] Building Integration Profile Candidate\n")
-            profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmwareTested, outDir, version)
+            profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmwareTested, buildDir, version)
             if err != nil {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: profile build rejected: %v\n", err)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: profile build rejected: %w", err)
             }
 
             // Verify output is CANDIDATE
             if profile.Status != "CANDIDATE" || profile.ValidationStatus != "CANDIDATE" {
-                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: output status is not CANDIDATE (got %s/%s)\n", profile.Status, profile.ValidationStatus)
-                os.Exit(1)
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: output status is not CANDIDATE (got %s/%s)", profile.Status, profile.ValidationStatus)
+            }
+
+            // Step 5: Live approval, signed admission, self-verification, publication.
+            if admissionMode {
+                fmt.Printf("[D3J-5] Engineer approval and signed registry admission (%s)\n", admission.decision)
+                if err := runGovernedAdmission(&profile, m, admission, buildDir, outDir); err != nil {
+                    return fmt.Errorf("[D3J] GOVERNED HANDOFF FAILED: %w", err)
+                }
+                fmt.Println("=== D3J GOVERNED HANDOFF SUCCEEDED ===")
+                fmt.Printf("  Published: %s\n", outDir)
+                fmt.Printf("  Candidate: CANDIDATE/CANDIDATE (approval and admission are separate artifacts)\n")
+                fmt.Printf("  Approval: %s by %s (approval.json is audit only)\n", approval.StatusEngineerApproved, admission.approver)
+                fmt.Printf("  Registry: %s sequence %d issuer %s\n", registry.StatusRegistryAdmitted, admission.sequence, admission.issuerKeyID)
+                return nil
             }
 
             fmt.Println("=== D3G GOVERNED PIPELINE SUCCEEDED ===")
@@ -314,6 +370,7 @@ All flags are mandatory except --count (default 1000).`,
             for _, auth := range profile.AuthorityChain {
                 fmt.Printf("    - %s\n", auth)
             }
+            return nil
         },
     }
     governedPipelineCmd.Flags().String("mapping", "", "path to MappingDefinition JSON (CANDIDATE status only)")
@@ -327,6 +384,13 @@ All flags are mandatory except --count (default 1000).`,
     governedPipelineCmd.Flags().String("transport", "", "transport protocol (tcp|serial|etc)")
     governedPipelineCmd.Flags().String("firmware", "", "firmware version tested")
     governedPipelineCmd.Flags().Int("count", 1000, "replay iteration count")
+    // D3J admission flags. Supplying any one makes all of them mandatory; supplying
+    // none preserves existing D3G behavior. Only the key PATH is accepted, never key bytes.
+    governedPipelineCmd.Flags().String("approver", "", "engineer identity recorded in the approval audit")
+    governedPipelineCmd.Flags().String("decision", "", "explicit engineer decision: APPROVE or REJECT")
+    governedPipelineCmd.Flags().String("issuer-key", "", "path to registry issuer Ed25519 private key (64 raw bytes or 128 hex chars)")
+    governedPipelineCmd.Flags().String("issuer-key-id", "", "registry issuer key id recorded in the attestation")
+    governedPipelineCmd.Flags().Uint64("sequence", 0, "governed admission sequence (must be greater than zero)")
 
     // full pipeline
     pipelineCmd := &cobra.Command{
@@ -375,7 +439,5 @@ All flags are mandatory except --count (default 1000).`,
     registerCmd.Flags().String("usaha", "", "")
     rootCmd.AddCommand(registerCmd)
 
-	if err := rootCmd.Execute(); err != nil {
-        os.Exit(1)
-    }
+    return rootCmd
 }
