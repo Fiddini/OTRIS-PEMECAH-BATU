@@ -2,6 +2,7 @@
 package main
 
 import (
+    "encoding/json"
     "fmt"
     "os"
     "time"
@@ -17,6 +18,7 @@ import (
     "github.com/otris-id/otris-pemecah-batu/internal/framing"
     "github.com/otris-id/otris-pemecah-batu/internal/ingress"
     "github.com/otris-id/otris-pemecah-batu/internal/inspector"
+    "github.com/otris-id/otris-pemecah-batu/internal/mapping"
     "github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
     "github.com/otris-id/otris-pemecah-batu/internal/replay"
     "github.com/spf13/cobra"
@@ -186,6 +188,146 @@ Hukum:
     buildCmd.Flags().String("out", "", "output dir")
     buildCmd.Flags().String("version", "1.0.0", "version")
 
+    // GOVERNED PIPELINE - orchestrates ReviewEvidence → ReviewReplay → BuildFromMappingDefinition
+    governedPipelineCmd := &cobra.Command{
+        Use:   "governed-pipeline",
+        Short: "D3G: Governed integration profile from explicit MappingDefinition",
+        Long: `Governed pipeline: MappingDefinition CANDIDATE → ReviewEvidence → ReviewReplay → BuildFromMappingDefinition → Integration Profile Candidate.
+
+Requires explicit MappingDefinition JSON file (CANDIDATE status only; authority restored fresh via ReviewEvidence and ReviewReplay).
+
+All flags are mandatory except --count (default 1000).`,
+        Run: func(cmd *cobra.Command, args []string) {
+            mappingPath, _ := cmd.Flags().GetString("mapping")
+            evidencePath, _ := cmd.Flags().GetString("evidence")
+            inputDir, _ := cmd.Flags().GetString("input")
+            groundTruthPath, _ := cmd.Flags().GetString("ground-truth")
+            outDir, _ := cmd.Flags().GetString("out")
+            version, _ := cmd.Flags().GetString("version")
+            count, _ := cmd.Flags().GetInt("count")
+            manufacturer, _ := cmd.Flags().GetString("manufacturer")
+            model, _ := cmd.Flags().GetString("model")
+            transport, _ := cmd.Flags().GetString("transport")
+            firmwareTested, _ := cmd.Flags().GetString("firmware")
+
+            // Validate required flags
+            for name, val := range map[string]string{
+                "--mapping": mappingPath,
+                "--evidence": evidencePath,
+                "--input": inputDir,
+                "--ground-truth": groundTruthPath,
+                "--out": outDir,
+                "--version": version,
+                "--manufacturer": manufacturer,
+                "--model": model,
+                "--transport": transport,
+                "--firmware": firmwareTested,
+            } {
+                if val == "" {
+                    fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: missing required flag %s\n", name)
+                    os.Exit(1)
+                }
+            }
+            if count <= 0 {
+                count = 1000
+            }
+
+            fmt.Println("=== D3G GOVERNED PIPELINE ===")
+
+            // Step 1: Load MappingDefinition from JSON (CANDIDATE status only)
+            fmt.Printf("[D3G-1] Loading MappingDefinition from %s\n", mappingPath)
+            mappingData, err := os.ReadFile(mappingPath)
+            if err != nil {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: cannot read mapping file: %v\n", err)
+                os.Exit(1)
+            }
+
+            m := &mapping.MappingDefinition{}
+            if err := json.Unmarshal(mappingData, m); err != nil {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: invalid MappingDefinition JSON: %v\n", err)
+                os.Exit(1)
+            }
+
+            status, err := m.Status()
+            if err != nil || status != mapping.StatusCandidate {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: MappingDefinition must be CANDIDATE, got %s: %v\n", status, err)
+                os.Exit(1)
+            }
+            fmt.Printf("[D3G-1] MappingDefinition loaded: %s/%s CANDIDATE\n", m.MappingIdentity, m.MappingVersion)
+
+            // Step 2: ReviewEvidence - request fresh evidence approval
+            fmt.Printf("[D3G-2] Reviewing evidence from %s\n", evidencePath)
+            evidenceReportPath := inputDir + "/governed_evidence_report.json"
+            if err := mapping.ReviewEvidence(m, evidencePath, evidenceReportPath); err != nil {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: evidence review rejected: %v\n", err)
+                os.Exit(1)
+            }
+
+            // Verify status transitioned to EVIDENCE_APPROVED
+            status, err = m.Status()
+            if err != nil || status != mapping.StatusEvidenceApproved {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: evidence approval did not transition status, got %s: %v\n", status, err)
+                os.Exit(1)
+            }
+            fmt.Printf("[D3G-2] Evidence approved: %s\n", evidenceReportPath)
+
+            // Step 3: ReviewReplay - request fresh replay measurement and validation
+            fmt.Printf("[D3G-3] Replaying claim from %s with ground truth %s (%d iterations)\n", inputDir, groundTruthPath, count)
+            replayReportPath := inputDir + "/governed_replay_report.json"
+            replayOpts := replay.ReplayOptions{GroundTruthPath: groundTruthPath}
+            replayReport, err := mapping.ReviewReplay(m, inputDir, count, replayOpts, replayReportPath)
+            if err != nil {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay validation rejected: %v\n", err)
+                os.Exit(1)
+            }
+
+            // Verify status transitioned to REPLAY_VALIDATED and report verdict
+            status, err = m.Status()
+            if err != nil || status != mapping.StatusReplayValidated {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay validation did not transition status, got %s: %v\n", status, err)
+                os.Exit(1)
+            }
+            if replayReport.Verdict != "READY_FOR_PROFILE_BUILDER" {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: replay verdict is %s, expected READY_FOR_PROFILE_BUILDER\n", replayReport.Verdict)
+                os.Exit(1)
+            }
+            fmt.Printf("[D3G-3] Replay validated: %s (false_data=%.1f)\n", replayReportPath, replayReport.FalseDataRate)
+
+            // Step 4: BuildFromMappingDefinition - construct Integration Profile Candidate
+            fmt.Printf("[D3G-4] Building Integration Profile Candidate\n")
+            profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmwareTested, outDir, version)
+            if err != nil {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: profile build rejected: %v\n", err)
+                os.Exit(1)
+            }
+
+            // Verify output is CANDIDATE
+            if profile.Status != "CANDIDATE" || profile.ValidationStatus != "CANDIDATE" {
+                fmt.Printf("[D3G] GOVERNED PIPELINE FAILED: output status is not CANDIDATE (got %s/%s)\n", profile.Status, profile.ValidationStatus)
+                os.Exit(1)
+            }
+
+            fmt.Println("=== D3G GOVERNED PIPELINE SUCCEEDED ===")
+            fmt.Printf("  Integration Profile Candidate: %s/profile.yaml\n", outDir)
+            fmt.Printf("  Status: CANDIDATE (requires engineer approval for next stage)\n")
+            fmt.Printf("  Authority chain:\n")
+            for _, auth := range profile.AuthorityChain {
+                fmt.Printf("    - %s\n", auth)
+            }
+        },
+    }
+    governedPipelineCmd.Flags().String("mapping", "", "path to MappingDefinition JSON (CANDIDATE status only)")
+    governedPipelineCmd.Flags().String("evidence", "", "path to evidence data file")
+    governedPipelineCmd.Flags().String("input", "", "input directory containing raw session data")
+    governedPipelineCmd.Flags().String("ground-truth", "", "path to ground truth expectations JSON")
+    governedPipelineCmd.Flags().String("out", "", "output directory for profile.yaml")
+    governedPipelineCmd.Flags().String("version", "", "profile version (e.g., 1.0.0)")
+    governedPipelineCmd.Flags().String("manufacturer", "", "device manufacturer")
+    governedPipelineCmd.Flags().String("model", "", "device model")
+    governedPipelineCmd.Flags().String("transport", "", "transport protocol (tcp|serial|etc)")
+    governedPipelineCmd.Flags().String("firmware", "", "firmware version tested")
+    governedPipelineCmd.Flags().Int("count", 1000, "replay iteration count")
+
     // full pipeline
     pipelineCmd := &cobra.Command{
         Use:   "pipeline [dir]",
@@ -207,7 +349,7 @@ Hukum:
         },
     }
 
-    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, pipelineCmd)
+    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd)
 
     
     var registerCmd = &cobra.Command{
