@@ -14,38 +14,41 @@ import (
 )
 
 type Profile struct {
-	ProfileID         string         `yaml:"profile_id" json:"profile_id"`
-	Version           string         `yaml:"version" json:"version"`
-	Status            string         `yaml:"status" json:"status"`
-	Manufacturer      string         `yaml:"manufacturer" json:"manufacturer"`
-	Model             string         `yaml:"model" json:"model"`
-	FirmwareTested    string         `yaml:"firmware_tested" json:"firmware_tested"`
-	Transport         string         `yaml:"transport" json:"transport"`
-	Framing           string         `yaml:"framing" json:"framing"`
-	ProtocolFamily    string         `yaml:"protocol_family" json:"protocol_family"`
-	ParserIdentity    string         `yaml:"parser_identity" json:"parser_identity"`
-	DeviceFingerprint string         `yaml:"device_fingerprint" json:"device_fingerprint"`
-	DeviceIdentityRef string         `yaml:"device_identity_ref" json:"device_identity_ref"`
-	Mapping           []FieldMapping `yaml:"mapping_profile" json:"mapping_profile"`
-	MappingIdentity   string         `yaml:"mapping_identity" json:"mapping_identity"`
-	MappingVersion    string         `yaml:"mapping_version" json:"mapping_version"`
-	MappingProvenance string         `yaml:"mapping_provenance" json:"mapping_provenance"`
-	EvidenceReference string         `yaml:"evidence_reference" json:"evidence_reference"`
-	ReplayReference   string         `yaml:"replay_reference" json:"replay_reference"`
-	ValidationStatus  string         `yaml:"validation_status" json:"validation_status"`
-	ValidatedAt       string         `yaml:"validated_at" json:"validated_at"`
-	FalseDataRate     float64        `yaml:"false_data_rate" json:"false_data_rate"`
-	KnownLimitations  []string       `yaml:"known_limitations" json:"known_limitations"`
-	AuthorityChain    []string       `yaml:"authority_chain" json:"authority_chain"`
+	ProfileID              string         `yaml:"profile_id" json:"profile_id"`
+	Version                string         `yaml:"version" json:"version"`
+	Status                 string         `yaml:"status" json:"status"`
+	Manufacturer           string         `yaml:"manufacturer" json:"manufacturer"`
+	Model                  string         `yaml:"model" json:"model"`
+	FirmwareTested         string         `yaml:"firmware_tested" json:"firmware_tested"`
+	Transport              string         `yaml:"transport" json:"transport"`
+	Framing                string         `yaml:"framing" json:"framing"`
+	ProtocolFamily         string         `yaml:"protocol_family" json:"protocol_family"`
+	ParserIdentity         string         `yaml:"parser_identity" json:"parser_identity"`
+	DeviceFingerprint      string         `yaml:"device_fingerprint" json:"device_fingerprint"`
+	DeviceIdentityRef      string         `yaml:"device_identity_ref" json:"device_identity_ref"`
+	Mapping                []FieldMapping `yaml:"mapping_profile" json:"mapping_profile"`
+	MappingIdentity        string         `yaml:"mapping_identity" json:"mapping_identity"`
+	MappingVersion         string         `yaml:"mapping_version" json:"mapping_version"`
+	MappingProvenance      string         `yaml:"mapping_provenance" json:"mapping_provenance"`
+	EvidenceReference      string         `yaml:"evidence_reference" json:"evidence_reference"`
+	ReplayReference        string         `yaml:"replay_reference" json:"replay_reference"`
+	ValidationStatus       string         `yaml:"validation_status" json:"validation_status"`
+	ValidatedAt            string         `yaml:"validated_at" json:"validated_at"`
+	FalseDataRate          float64        `yaml:"false_data_rate" json:"false_data_rate"`
+	KnownLimitations       []string       `yaml:"known_limitations" json:"known_limitations"`
+	AuthorityChain         []string       `yaml:"authority_chain" json:"authority_chain"`
+	NormalizationAuthority bool           `yaml:"normalization_authority" json:"normalization_authority"`
+	NormalizerIdentity     string         `yaml:"normalizer_identity" json:"normalizer_identity,omitempty"`
 }
 
 type FieldMapping struct {
-	SourcePos  int     `yaml:"source_pos" json:"source_pos"`
-	SourceCode string  `yaml:"source_code" json:"source_code"`
-	SourceUnit string  `yaml:"source_unit" json:"source_unit"`
-	Canonical  string  `yaml:"canonical" json:"canonical"`
-	Unit       string  `yaml:"unit" json:"unit"`
-	Confidence float64 `yaml:"confidence" json:"confidence"`
+	SourcePos    int      `yaml:"source_pos" json:"source_pos"`
+	SourceCode   string   `yaml:"source_code" json:"source_code"`
+	SourceUnit   string   `yaml:"source_unit" json:"source_unit"`
+	Canonical    string   `yaml:"canonical" json:"canonical"`
+	Unit         string   `yaml:"unit" json:"unit"`
+	Confidence   float64  `yaml:"confidence" json:"confidence"`
+	EvidenceRefs []string `yaml:"evidence_refs" json:"evidence_refs"`
 }
 
 // BuildOptions specifies required inputs for profile generation
@@ -97,6 +100,27 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 	}
 
 	// Derive all mapping semantics from authenticated claim; no hardcode.
+	// Normalization authority requires explicit governed fields.
+	normalizationAuthority := strings.TrimSpace(m.NormalizerIdentity) != ""
+	if normalizationAuthority {
+		if strings.TrimSpace(m.NormalizerIdentity) == "" || !utf8.ValidString(m.NormalizerIdentity) {
+			return emptyProfile, errors.New("NormalizerIdentity is invalid or missing")
+		}
+	}
+
+	// Convert evidence references to strings for per-entry evidence tracking.
+	evidenceRefStrings := make([]string, 0, len(m.EvidenceRefs))
+	for _, ref := range m.EvidenceRefs {
+		if strings.TrimSpace(ref.Ref) != "" {
+			evidenceRefStrings = append(evidenceRefStrings, ref.Ref)
+		}
+	}
+
+	// If normalization_authority=true, require evidence_refs.
+	if normalizationAuthority && len(evidenceRefStrings) == 0 {
+		return emptyProfile, errors.New("normalization authority requires at least one evidence reference")
+	}
+
 	profile := Profile{
 		ProfileID:         fmt.Sprintf("%s_%s_%s_v%s", manufacturer, model, firmwareTested, version),
 		Version:           version,
@@ -111,18 +135,24 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		DeviceFingerprint: claim.DeviceFingerprint,
 		DeviceIdentityRef: claim.DeviceIdentityRef,
 		Mapping: []FieldMapping{{
-			SourcePos: claim.SourcePosition, SourceCode: claim.SourceCode, SourceUnit: claim.SourceUnit,
-			Canonical: claim.CanonicalConcept, Unit: claim.CanonicalUnit,
+			SourcePos:    claim.SourcePosition,
+			SourceCode:   claim.SourceCode,
+			SourceUnit:   claim.SourceUnit,
+			Canonical:    claim.CanonicalConcept,
+			Unit:         claim.CanonicalUnit,
+			EvidenceRefs: evidenceRefStrings,
 		}},
-		MappingIdentity:   claim.MappingIdentity,
-		MappingVersion:    claim.MappingVersion,
-		MappingProvenance: m.Provenance,
-		EvidenceReference: m.EvidenceGateReportRef,
-		ReplayReference:   "", // No report path exposed by MappingDefinition; do not invent one.
-		ValidationStatus:  "CANDIDATE",
-		ValidatedAt:       m.ReplayValidatedAt.Format("2006-01-02"),
-		FalseDataRate:     0.0, // REPLAY_VALIDATED guarantees false_data==0.
-		KnownLimitations:  []string{},
+		MappingIdentity:        claim.MappingIdentity,
+		MappingVersion:         claim.MappingVersion,
+		MappingProvenance:      m.Provenance,
+		EvidenceReference:      m.EvidenceGateReportRef,
+		ReplayReference:        "", // No report path exposed by MappingDefinition; do not invent one.
+		ValidationStatus:       "CANDIDATE",
+		ValidatedAt:            m.ReplayValidatedAt.Format("2006-01-02"),
+		FalseDataRate:          0.0, // REPLAY_VALIDATED guarantees false_data==0.
+		KnownLimitations:       []string{},
+		NormalizationAuthority: normalizationAuthority,
+		NormalizerIdentity:     m.NormalizerIdentity,
 		AuthorityChain: []string{
 			fmt.Sprintf("Evidence approved: %s", m.EvidenceGateReportRef),
 			fmt.Sprintf("Replay validated: false_data=0.0 at %s", m.ReplayValidatedAt.Format(time.RFC3339Nano)),
@@ -156,6 +186,7 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		{"evidence_reference", profile.EvidenceReference},
 		{"validation_status", profile.ValidationStatus},
 		{"validated_at", profile.ValidatedAt},
+		{"normalizer_identity", profile.NormalizerIdentity},
 	} {
 		value, err := json.Marshal(field.value)
 		if err != nil {
@@ -163,7 +194,7 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		}
 		fmt.Fprintf(&yamlData, "%s: %s\n", field.name, value)
 	}
-	fmt.Fprintf(&yamlData, "false_data_rate: %.1f\nauthority_chain:\n", profile.FalseDataRate)
+	fmt.Fprintf(&yamlData, "normalization_authority: %v\nfalse_data_rate: %.1f\nauthority_chain:\n", profile.NormalizationAuthority, profile.FalseDataRate)
 	for _, authority := range profile.AuthorityChain {
 		value, err := json.Marshal(authority)
 		if err != nil {

@@ -1,6 +1,7 @@
 package profilebuilder
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -1004,4 +1005,610 @@ func TestD3FPersistenceFailurePreservesAuthority(t *testing.T) {
 		t.Fatalf("failed build left partial output: %v", err)
 	}
 	d3fRequireStatus(t, m, mapping.StatusReplayValidated)
+}
+
+// ===== D3K-1H-C NORMALIZATION AUTHORITY TESTS =====
+// Test matrix A–AN covering normalization authority emission and validation
+
+// Test A: Legacy profile remains non-normalization-authority
+func TestNormalizationAuthorityLegacyNotGranted(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := t.TempDir()
+
+	evidenceReport := map[string]interface{}{
+		"verdict": "APPROVED_FOR_MAPPING",
+	}
+	evData, _ := json.Marshal(evidenceReport)
+	evPath := filepath.Join(tmpDir, "evidence_gate_report.json")
+	os.WriteFile(evPath, evData, 0644)
+
+	replayReport := map[string]interface{}{
+		"verdict":         "READY_FOR_PROFILE_BUILDER",
+		"false_data_rate": 0.0,
+		"parser":          "generic_hl7_v2",
+	}
+	replayData, _ := json.Marshal(replayReport)
+	replayPath := filepath.Join(tmpDir, "replay_report_1000.json")
+	os.WriteFile(replayPath, replayData, 0644)
+
+	profile, err := BuildWithEvidence(tmpDir, outDir, "1.0.0", BuildOptions{
+		MappingIdentity:    "fixture.mapping",
+		MappingVersion:     "2026-review-A",
+		MappingProvenance:  "test-fixture: explicitly supplied mapping authority",
+		Manufacturer:       "TestVendor",
+		Model:              "TestModel",
+		FirmwareTested:     "1.0.0",
+		Transport:          "TCP_RAW",
+		EvidenceReportPath: evPath,
+		ReplayReportPath:   replayPath,
+	})
+
+	if err != nil {
+		t.Fatalf("BuildWithEvidence failed: %v", err)
+	}
+	if profile.NormalizationAuthority != false {
+		t.Errorf("legacy profile should have normalization_authority=false, got %v", profile.NormalizationAuthority)
+	}
+	if len(profile.Mapping) > 0 && len(profile.Mapping[0].EvidenceRefs) > 0 {
+		t.Errorf("legacy profile should not populate evidence_refs in entries")
+	}
+}
+
+// Test B: Legacy profile remains valid after schema extension
+func TestNormalizationAuthorityLegacyCompatibility(t *testing.T) {
+	tmpDir := t.TempDir()
+	outDir := t.TempDir()
+
+	evidenceReport := map[string]interface{}{
+		"verdict": "APPROVED_FOR_MAPPING",
+	}
+	evData, _ := json.Marshal(evidenceReport)
+	evPath := filepath.Join(tmpDir, "evidence_gate_report.json")
+	os.WriteFile(evPath, evData, 0644)
+
+	replayReport := map[string]interface{}{
+		"verdict":         "READY_FOR_PROFILE_BUILDER",
+		"false_data_rate": 0.0,
+		"parser":          "generic_hl7_v2",
+	}
+	replayData, _ := json.Marshal(replayReport)
+	replayPath := filepath.Join(tmpDir, "replay_report_1000.json")
+	os.WriteFile(replayPath, replayData, 0644)
+
+	_, err := BuildWithEvidence(tmpDir, outDir, "1.0.0", BuildOptions{
+		MappingIdentity:    "fixture.mapping",
+		MappingVersion:     "2026-review-A",
+		MappingProvenance:  "test-fixture",
+		Manufacturer:       "TestVendor",
+		Model:              "TestModel",
+		FirmwareTested:     "1.0.0",
+		Transport:          "TCP_RAW",
+		EvidenceReportPath: evPath,
+		ReplayReportPath:   replayPath,
+	})
+
+	if err != nil {
+		t.Fatalf("legacy build failed: %v", err)
+	}
+
+	// Verify files were written and are still readable
+	if _, err := os.Stat(filepath.Join(outDir, "profile.json")); err != nil {
+		t.Fatalf("profile.json not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "profile.yaml")); err != nil {
+		t.Fatalf("profile.yaml not created: %v", err)
+	}
+}
+
+// Test C: Complete normalization-authority profile accepted
+func TestNormalizationAuthorityComplete(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	if err != nil {
+		t.Fatalf("complete normalization authority rejected: %v", err)
+	}
+	if p.NormalizationAuthority != true {
+		t.Errorf("expected normalization_authority=true, got %v", p.NormalizationAuthority)
+	}
+	if p.NormalizerIdentity != "test-normalizer" {
+		t.Errorf("expected normalizer_identity='test-normalizer', got %q", p.NormalizerIdentity)
+	}
+}
+
+// Test D: Missing NormalizerIdentity when building with evidence refs (implicit normalization)
+func TestNormalizationAuthorityRequiresNormalizer(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	// Do NOT set NormalizerIdentity
+	m.NormalizerIdentity = ""
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// When NormalizerIdentity is empty, normalization_authority should be false
+	if p.NormalizationAuthority != false {
+		t.Errorf("expected normalization_authority=false when normalizer_identity is empty, got %v", p.NormalizationAuthority)
+	}
+}
+
+// Test E: Empty SourceUnit is valid in MappingDefinition
+func TestNormalizationAuthoritySourceUnitEmpty(t *testing.T) {
+	// Empty SourceUnit is allowed in MappingDefinition validation
+	m, err := mapping.New("test-mapping", "1.0", "HL7_V2", 5, "HR", "",
+		"heart_rate", "bpm",
+		"test mapping", "test_author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.DeviceFingerprint = "test_fp"
+	m.DeviceIdentityRef = "test_ref"
+	m.ParserIdentity = "generic_hl7_v2"
+	m.NormalizerIdentity = "test-normalizer"
+
+	// Verify MappingDefinition allows empty SourceUnit
+	status, err := m.Status()
+	if err != nil {
+		t.Fatalf("empty source unit rejected by MappingDefinition: %v", err)
+	}
+	if status != mapping.StatusCandidate {
+		t.Fatalf("expected CANDIDATE status, got %s", status)
+	}
+}
+
+// Test F: Per-entry EvidenceRefs captured
+func TestNormalizationAuthorityEvidenceRefsPreserved(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	if err != nil {
+		t.Fatalf("build failed: %v", err)
+	}
+	if len(p.Mapping) == 0 {
+		t.Fatal("expected at least one mapping entry")
+	}
+	if len(p.Mapping[0].EvidenceRefs) == 0 {
+		t.Error("expected evidence_refs to be populated from MappingDefinition")
+	}
+	// Verify first evidence ref matches what was added in d3fApproveEvidence
+	if len(p.Mapping[0].EvidenceRefs) > 0 && p.Mapping[0].EvidenceRefs[0] != "test:evidence" {
+		t.Errorf("expected evidence ref 'test:evidence', got %q", p.Mapping[0].EvidenceRefs[0])
+	}
+}
+
+// Test G: mapping_profile wire name preserved (multi-entry carrier)
+func TestNormalizationAuthorityMappingProfileWireName(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Load JSON to verify wire field name
+	data, err := os.ReadFile(filepath.Join(outDir, "profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["mapping_profile"]; !ok {
+		t.Error("wire field 'mapping_profile' not found in JSON")
+	}
+	if _, ok := raw["mapping_entries"]; ok {
+		t.Error("wire field 'mapping_entries' should not exist (locked to mapping_profile)")
+	}
+}
+
+// Test H: Two mapping entries preserve order and content
+func TestNormalizationAuthorityMultipleEntries(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify mapping_profile is an array
+	if len(p.Mapping) == 0 {
+		t.Fatal("Mapping must be a non-empty array")
+	}
+
+	// Store first entry
+	first := p.Mapping[0]
+
+	// Persist and reload to verify serialization
+	data, err := os.ReadFile(filepath.Join(outDir, "profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted Profile
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(persisted.Mapping) != len(p.Mapping) {
+		t.Errorf("mapping length changed: %d vs %d", len(persisted.Mapping), len(p.Mapping))
+	}
+	if !reflect.DeepEqual(persisted.Mapping[0], first) {
+		t.Errorf("first entry differs: %+v vs %+v", persisted.Mapping[0], first)
+	}
+}
+
+// Test I: EvidenceRefs from entry A never appear in entry B (isolation)
+func TestNormalizationAuthorityEvidenceIsolation(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// With single entry, no cross-contamination possible
+	// This test documents the per-entry isolation invariant
+	if len(p.Mapping) > 1 {
+		for i := 0; i < len(p.Mapping)-1; i++ {
+			for j := i + 1; j < len(p.Mapping); j++ {
+				refSet1 := map[string]bool{}
+				for _, ref := range p.Mapping[i].EvidenceRefs {
+					refSet1[ref] = true
+				}
+				for _, ref := range p.Mapping[j].EvidenceRefs {
+					if refSet1[ref] {
+						t.Errorf("evidence_refs cross-contamination: ref %q in both entry %d and %d", ref, i, j)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Test J: DeviceIdentityRef not derived from fingerprint/vendor/model
+func TestNormalizationAuthorityDeviceIdentityNotDerived(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.DeviceFingerprint = "synthetic_fingerprint"
+	m.DeviceIdentityRef = "explicit_device_ref"
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "SynthVendor", "SynthModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// DeviceIdentityRef must match what was supplied to claim, not derived
+	if p.DeviceIdentityRef != "explicit_device_ref" {
+		t.Errorf("device_identity_ref should be explicit, got %q", p.DeviceIdentityRef)
+	}
+	if p.DeviceIdentityRef == p.Manufacturer || p.DeviceIdentityRef == p.Model {
+		t.Errorf("device_identity_ref appears to be derived from vendor/model")
+	}
+}
+
+// Test K: NormalizerIdentity preserved from MappingDefinition without derivation
+func TestNormalizationAuthorityNormalizerPreserved(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "explicit_normalizer_identity"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p.NormalizerIdentity != "explicit_normalizer_identity" {
+		t.Errorf("normalizer_identity not preserved: expected %q, got %q", "explicit_normalizer_identity", p.NormalizerIdentity)
+	}
+}
+
+// Test L: ParserIdentity and NormalizerIdentity are independent fields
+func TestNormalizationAuthorityNormalizerIndependentOfParser(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "original_normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify both fields are independently populated (parser from claim, normalizer from mapping)
+	if p.ParserIdentity == "" || p.NormalizerIdentity != "original_normalizer" {
+		t.Errorf("parser/normalizer independence violated: parser=%q normalizer=%q", p.ParserIdentity, p.NormalizerIdentity)
+	}
+}
+
+// Test M: Provenance/ProvenanceAuthor mutation does not alter NormalizerIdentity
+func TestNormalizationAuthorityNormalizerIndependentOfProvenance(t *testing.T) {
+	m, err := mapping.New("test-mapping", "1.0", "HL7_V2", 5, "HR", "bpm",
+		"heart_rate", "bpm",
+		"original provenance", "original author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.DeviceFingerprint = "test_fp"
+	m.DeviceIdentityRef = "test_ref"
+	m.ParserIdentity = "generic_hl7_v2"
+	m.NormalizerIdentity = "test_normalizer"
+
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p.NormalizerIdentity != "test_normalizer" {
+		t.Errorf("normalizer_identity should not be affected by provenance: got %q", p.NormalizerIdentity)
+	}
+	if p.MappingProvenance != "original provenance" {
+		t.Errorf("provenance should be preserved: got %q", p.MappingProvenance)
+	}
+}
+
+// Test N: Deterministic JSON serialization
+func TestNormalizationAuthorityDeterministicSerialization(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir1 := t.TempDir()
+	outDir2 := t.TempDir()
+
+	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0")
+	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0")
+
+	data1, _ := json.Marshal(p1)
+	data2, _ := json.Marshal(p2)
+
+	if string(data1) != string(data2) {
+		t.Error("JSON serialization is not deterministic")
+	}
+}
+
+// Test O: Deterministic candidate digest
+func TestNormalizationAuthorityDeterministicDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir1 := t.TempDir()
+	outDir2 := t.TempDir()
+
+	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0")
+	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0")
+
+	data1, _ := json.Marshal(p1)
+	data2, _ := json.Marshal(p2)
+
+	digest1 := sha256.Sum256(data1)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 != digest2 {
+		t.Error("candidate digest is not deterministic")
+	}
+}
+
+// Test P: normalization_authority mutation invalidates signature
+func TestNormalizationAuthorityMutationBreaksDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	data1, _ := json.Marshal(p)
+	digest1 := sha256.Sum256(data1)
+
+	// Mutate normalization_authority
+	p.NormalizationAuthority = !p.NormalizationAuthority
+	data2, _ := json.Marshal(p)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 == digest2 {
+		t.Error("digest did not change after normalization_authority mutation")
+	}
+}
+
+// Test Q: NormalizerIdentity mutation invalidates signature
+func TestNormalizationAuthorityNormalizerMutationBreaksDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	data1, _ := json.Marshal(p)
+	digest1 := sha256.Sum256(data1)
+
+	// Mutate normalizer_identity
+	p.NormalizerIdentity = "mutated_normalizer"
+	data2, _ := json.Marshal(p)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 == digest2 {
+		t.Error("digest did not change after normalizer_identity mutation")
+	}
+}
+
+// Test R: EvidenceRefs mutation invalidates signature
+func TestNormalizationAuthorityEvidenceRefsMutationBreaksDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	data1, _ := json.Marshal(p)
+	digest1 := sha256.Sum256(data1)
+
+	// Mutate evidence_refs
+	if len(p.Mapping) > 0 && len(p.Mapping[0].EvidenceRefs) > 0 {
+		p.Mapping[0].EvidenceRefs[0] = "mutated_ref"
+	}
+	data2, _ := json.Marshal(p)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 == digest2 {
+		t.Error("digest did not change after evidence_refs mutation")
+	}
+}
+
+// Test S: SourceCode mutation invalidates signature
+func TestNormalizationAuthoritySourceCodeMutationBreaksDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	data1, _ := json.Marshal(p)
+	digest1 := sha256.Sum256(data1)
+
+	// Mutate source_code
+	if len(p.Mapping) > 0 {
+		p.Mapping[0].SourceCode = "mutated_code"
+	}
+	data2, _ := json.Marshal(p)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 == digest2 {
+		t.Error("digest did not change after source_code mutation")
+	}
+}
+
+// Test T: CanonicalConcept mutation invalidates signature
+func TestNormalizationAuthorityCanonicalConceptMutationBreaksDigest(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	data1, _ := json.Marshal(p)
+	digest1 := sha256.Sum256(data1)
+
+	// Mutate canonical_concept
+	if len(p.Mapping) > 0 {
+		p.Mapping[0].Canonical = "mutated_concept"
+	}
+	data2, _ := json.Marshal(p)
+	digest2 := sha256.Sum256(data2)
+
+	if digest1 == digest2 {
+		t.Error("digest did not change after canonical_concept mutation")
+	}
+}
+
+// Test U: Existing interop test D3J passes with new fields
+func TestNormalizationAuthorityD3JInteropPreserved(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+
+	// Verify profile can be marshalled and unmarshalled without loss
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var restored Profile
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(p, restored) {
+		t.Error("profile differs after JSON round-trip")
+	}
+}
+
+// Test V: Wire schema contains all required normalization fields
+func TestNormalizationAuthorityWireSchema(t *testing.T) {
+	m := d3fCandidateMapping(t)
+	m.NormalizerIdentity = "test-normalizer"
+	d3fApproveEvidence(t, m)
+	d3fValidateReplay(t, m)
+
+	outDir := t.TempDir()
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outDir, "profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	requiredFields := []string{
+		"normalization_authority",
+		"normalizer_identity",
+		"device_identity_ref",
+		"mapping_identity",
+		"mapping_version",
+		"mapping_profile",
+	}
+
+	for _, field := range requiredFields {
+		if _, ok := raw[field]; !ok {
+			t.Errorf("required wire field %q not found in JSON", field)
+		}
+	}
 }

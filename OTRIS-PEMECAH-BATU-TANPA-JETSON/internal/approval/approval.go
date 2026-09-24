@@ -186,11 +186,14 @@ func candidateDigest(p *profilebuilder.Profile, m *mapping.MappingDefinition) ([
 		p.DeviceFingerprint != claim.DeviceFingerprint || p.DeviceIdentityRef != claim.DeviceIdentityRef {
 		return empty, errors.New("candidate protocol or device context mismatch")
 	}
-	field := profilebuilder.FieldMapping{
-		SourcePos: claim.SourcePosition, SourceCode: claim.SourceCode, SourceUnit: claim.SourceUnit,
-		Canonical: claim.CanonicalConcept, Unit: claim.CanonicalUnit,
+	// Verify field mapping matches claim (compare individual fields, not slices)
+	if len(p.Mapping) != 1 {
+		return empty, errors.New("candidate field mapping count mismatch")
 	}
-	if len(p.Mapping) != 1 || p.Mapping[0] != field {
+	mapped := p.Mapping[0]
+	if mapped.SourcePos != claim.SourcePosition || mapped.SourceCode != claim.SourceCode ||
+		mapped.SourceUnit != claim.SourceUnit || mapped.Canonical != claim.CanonicalConcept ||
+		mapped.Unit != claim.CanonicalUnit {
 		return empty, errors.New("candidate field mapping mismatch")
 	}
 	// ponytail: D3F's fixed four-entry chain. Update this check only with an approved candidate schema change.

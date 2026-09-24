@@ -148,15 +148,16 @@ func TestNewMissingSourceCode(t *testing.T) {
 
 // Test G: Missing SourceUnit → rejected
 func TestNewMissingSourceUnit(t *testing.T) {
+	// SourceUnit MAY be empty (unitless observations are valid).
 	identity, version, proto, pos, code, _, concept, canonical, prov, author := validTestInputs()
 
-	_, err := New(identity, version, proto, pos, code, "", concept, canonical, prov, author)
+	def, err := New(identity, version, proto, pos, code, "", concept, canonical, prov, author)
 
-	if err == nil {
-		t.Error("expected error for missing source_unit, got nil")
+	if err != nil {
+		t.Errorf("empty source_unit should be valid, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "source_unit") {
-		t.Errorf("expected error to mention source_unit, got: %v", err)
+	if def.SourceUnit != "" {
+		t.Errorf("expected empty SourceUnit, got %q", def.SourceUnit)
 	}
 }
 

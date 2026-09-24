@@ -115,7 +115,7 @@ func validateClaim(claim Claim) error {
 		{"mapping_version", claim.MappingVersion, true},
 		{"source_protocol", claim.SourceProtocol, true},
 		{"source_code", claim.SourceCode, true},
-		{"source_unit", claim.SourceUnit, true},
+		{"source_unit", claim.SourceUnit, false}, // MAY be empty for unitless observations
 		{"canonical_concept", claim.CanonicalConcept, true},
 		{"canonical_unit", claim.CanonicalUnit, true},
 		{"parser_identity", claim.ParserIdentity, false},

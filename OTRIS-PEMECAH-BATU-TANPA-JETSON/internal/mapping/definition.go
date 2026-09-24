@@ -35,6 +35,7 @@ type MappingDefinition struct {
 	DeviceFingerprint  string `json:"device_fingerprint,omitempty"`  // structural hash from PB-10
 	DeviceIdentityRef  string `json:"device_identity_ref,omitempty"` // device model/vendor reference
 	ParserIdentity     string `json:"parser_identity,omitempty"`     // parser that extracts this field
+	NormalizerIdentity string `json:"normalizer_identity,omitempty"` // governed normalizer identity (explicit, non-derived)
 
 	// Evidence & Provenance References
 	EvidenceGateReportRef  string     `json:"evidence_gate_report_ref"`            // absolute path to evidence_gate_report.json
@@ -81,8 +82,9 @@ func New(
 	if err := validateRequiredField("source_code", sourceCode); err != nil {
 		return nil, err
 	}
-	if err := validateRequiredField("source_unit", sourceUnit); err != nil {
-		return nil, err
+	// SourceUnit MAY be empty (unitless observations are valid).
+	if sourceUnit != "" && !utf8.ValidString(sourceUnit) {
+		return nil, fmt.Errorf("source_unit is invalid UTF-8")
 	}
 	if err := validateRequiredField("canonical_concept", canonicalConcept); err != nil {
 		return nil, err
@@ -187,8 +189,9 @@ func (m *MappingDefinition) Validate() error {
 	if err := validateRequiredField("source_code", m.SourceCode); err != nil {
 		return err
 	}
-	if err := validateRequiredField("source_unit", m.SourceUnit); err != nil {
-		return err
+	// SourceUnit MAY be empty (unitless observations are valid).
+	if m.SourceUnit != "" && !utf8.ValidString(m.SourceUnit) {
+		return fmt.Errorf("source_unit is invalid UTF-8")
 	}
 	if err := validateRequiredField("canonical_concept", m.CanonicalConcept); err != nil {
 		return err
