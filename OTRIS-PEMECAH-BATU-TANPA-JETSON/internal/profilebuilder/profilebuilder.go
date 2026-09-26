@@ -16,7 +16,9 @@ import (
 type Profile struct {
 	ProfileID              string         `yaml:"profile_id" json:"profile_id"`
 	Version                string         `yaml:"version" json:"version"`
-	Status                 string         `yaml:"status" json:"status"`
+	CapabilitySupport      string         `yaml:"capability_support" json:"capability_support"`
+	CompatibilityStatus    string         `yaml:"compatibility_status" json:"compatibility_status"`
+	GovernanceStatus       string         `yaml:"governance_status" json:"governance_status"`
 	Manufacturer           string         `yaml:"manufacturer" json:"manufacturer"`
 	Model                  string         `yaml:"model" json:"model"`
 	FirmwareTested         string         `yaml:"firmware_tested" json:"firmware_tested"`
@@ -32,13 +34,16 @@ type Profile struct {
 	MappingProvenance      string         `yaml:"mapping_provenance" json:"mapping_provenance"`
 	EvidenceReference      string         `yaml:"evidence_reference" json:"evidence_reference"`
 	ReplayReference        string         `yaml:"replay_reference" json:"replay_reference"`
-	ValidationStatus       string         `yaml:"validation_status" json:"validation_status"`
 	ValidatedAt            string         `yaml:"validated_at" json:"validated_at"`
 	FalseDataRate          float64        `yaml:"false_data_rate" json:"false_data_rate"`
 	KnownLimitations       []string       `yaml:"known_limitations" json:"known_limitations"`
 	AuthorityChain         []string       `yaml:"authority_chain" json:"authority_chain"`
 	NormalizationAuthority bool           `yaml:"normalization_authority" json:"normalization_authority"`
 	NormalizerIdentity     string         `yaml:"normalizer_identity" json:"normalizer_identity,omitempty"`
+	// Deprecated legacy governance fields — retained for migration read, not authoritative.
+	// Governed path uses CapabilitySupport/CompatibilityStatus/GovernanceStatus.
+	Status           string `yaml:"status,omitempty" json:"status,omitempty"`
+	ValidationStatus string `yaml:"validation_status,omitempty" json:"validation_status,omitempty"`
 }
 
 type FieldMapping struct {
@@ -122,18 +127,20 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 	}
 
 	profile := Profile{
-		ProfileID:         fmt.Sprintf("%s_%s_%s_v%s", manufacturer, model, firmwareTested, version),
-		Version:           version,
-		Status:            "CANDIDATE",
-		Manufacturer:      manufacturer,
-		Model:             model,
-		FirmwareTested:    firmwareTested,
-		Transport:         transport,
-		Framing:           "", // MappingDefinition supplies no framing authority.
-		ProtocolFamily:    claim.SourceProtocol,
-		ParserIdentity:    claim.ParserIdentity,
-		DeviceFingerprint: claim.DeviceFingerprint,
-		DeviceIdentityRef: claim.DeviceIdentityRef,
+		ProfileID:           fmt.Sprintf("%s_%s_%s_v%s", manufacturer, model, firmwareTested, version),
+		Version:             version,
+		CapabilitySupport:   "SUPPORTED",
+		CompatibilityStatus: "REAL_DEVICE_VALIDATED",
+		GovernanceStatus:    "CANDIDATE",
+		Manufacturer:        manufacturer,
+		Model:               model,
+		FirmwareTested:      firmwareTested,
+		Transport:           transport,
+		Framing:             "", // MappingDefinition supplies no framing authority.
+		ProtocolFamily:      claim.SourceProtocol,
+		ParserIdentity:      claim.ParserIdentity,
+		DeviceFingerprint:   claim.DeviceFingerprint,
+		DeviceIdentityRef:   claim.DeviceIdentityRef,
 		Mapping: []FieldMapping{{
 			SourcePos:    claim.SourcePosition,
 			SourceCode:   claim.SourceCode,
@@ -147,7 +154,6 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		MappingProvenance:      m.Provenance,
 		EvidenceReference:      m.EvidenceGateReportRef,
 		ReplayReference:        "", // No report path exposed by MappingDefinition; do not invent one.
-		ValidationStatus:       "CANDIDATE",
 		ValidatedAt:            m.ReplayValidatedAt.Format("2006-01-02"),
 		FalseDataRate:          0.0, // REPLAY_VALIDATED guarantees false_data==0.
 		KnownLimitations:       []string{},
@@ -170,7 +176,9 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 	for _, field := range []struct{ name, value string }{
 		{"profile_id", profile.ProfileID},
 		{"version", profile.Version},
-		{"status", profile.Status},
+		{"capability_support", profile.CapabilitySupport},
+		{"compatibility_status", profile.CompatibilityStatus},
+		{"governance_status", profile.GovernanceStatus},
 		{"manufacturer", profile.Manufacturer},
 		{"model", profile.Model},
 		{"firmware_tested", profile.FirmwareTested},
@@ -184,7 +192,6 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		{"mapping_version", profile.MappingVersion},
 		{"mapping_provenance", profile.MappingProvenance},
 		{"evidence_reference", profile.EvidenceReference},
-		{"validation_status", profile.ValidationStatus},
 		{"validated_at", profile.ValidatedAt},
 		{"normalizer_identity", profile.NormalizerIdentity},
 	} {
