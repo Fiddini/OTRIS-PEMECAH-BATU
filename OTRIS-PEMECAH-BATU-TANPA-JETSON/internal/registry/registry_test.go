@@ -583,3 +583,101 @@ func TestProduceE2E01b(t *testing.T) {
 
 	t.Logf("E2E-01b artifacts written to %s", artifactsDir)
 }
+
+// newFixtureTCP creates a TCP transport variant of the E2E test fixture.
+// Identical to newFixture except transport="tcp" for MLLP ingestion testing.
+func newFixtureTCP(t *testing.T) fixture {
+	t.Helper()
+	dir := t.TempDir()
+	m, err := mapping.New("e2e02.fixture", "mapping-tcp-1", "HL7_V2", 5, "PULSE", "bpm",
+		"pulse_rate", "bpm", "TCP/MLLP fixture claim", "e2e-02-author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ParserIdentity, m.DeviceFingerprint, m.DeviceIdentityRef = "generic_hl7_v2", "e2e02-fp", "e2e02-device"
+	m.NormalizerIdentity = "otris.normalizer.exact-evidence-mapping.v1"
+	bundle := evidence.ClaimReview{Claim: m.Claim(), Evidence: []evidence.Evidence{
+		{Type: "VENDOR_MANUAL", Ref: "e2e02:manual"},
+		{Type: "SIMULATOR_LOG", Ref: "e2e02:measurement"},
+	}}
+	evidencePath := filepath.Join(dir, "evidence.json")
+	if err := os.WriteFile(evidencePath, jsonBytes(t, bundle), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mapping.ReviewEvidence(m, evidencePath, filepath.Join(dir, "evidence-report.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "raw_stream.bin"), []byte("MSH|^~\\&|e2e02\nOBX|1|NM|PULSE||72|bpm\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	truth := filepath.Join(dir, "ground-truth.json")
+	if err := os.WriteFile(truth, []byte(`{"pulse_rate":72}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mapping.ReviewReplay(m, dir, 2, replay.ReplayOptions{GroundTruthPath: truth}, filepath.Join(dir, "replay-report.json")); err != nil {
+		t.Fatal(err)
+	}
+	// TCP transport for MLLP/localhost ingestion testing
+	p, err := profilebuilder.BuildFromMappingDefinition(m, "E2E-02 TCP Device", "Device TCP", "tcp",
+		"fw-tcp-1", filepath.Join(dir, "profile"), "profile-tcp-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Framing is NOT in the profile (governance requirement: Framing="").
+	// Wire framing (MLLP for TCP) is supplied through deployment configuration only.
+	a, err := approval.Review(&p, m, "engineer:e2e02-tcp", approval.DecisionApprove)
+	if err != nil || a == nil {
+		t.Fatalf("approval=%v err=%v", a, err)
+	}
+	if err := a.Validate(&p, m); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, issuerKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixture{candidate: &p, mapping: m, approval: a, publicKey: publicKey, issuerKey: issuerKey}
+}
+
+// TestProduceE2E02tcp produces a governed TCP profile for E2E-02 ingestion testing.
+//
+// Identical to TestProduceE2E01b except:
+// - Transport = TCP (for localhost MLLP testing)
+// - Separate artifact directory (E2E_ARTIFACTS_TCP_DIR)
+// - Separate issuer key ID for artifact tracking
+//
+// Writes:
+// - profile-tcp.json
+// - registry-attestation-tcp.json
+// - e2e-tcp-public-key.hex
+func TestProduceE2E02tcp(t *testing.T) {
+	artifactsDir := os.Getenv("E2E_ARTIFACTS_TCP_DIR")
+	if artifactsDir == "" {
+		t.Skip("E2E_ARTIFACTS_TCP_DIR not set; skipping E2E-02 TCP producer")
+	}
+
+	f := newFixtureTCP(t)
+
+	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, "e2e-02-tcp-issuer", 1)
+	if err != nil {
+		t.Fatalf("registry.Admit failed: %v", err)
+	}
+
+	if err := registry.VerifyAttestation(attestation, f.candidate, f.publicKey, "e2e-02-tcp-issuer"); err != nil {
+		t.Fatalf("attestation verification failed: %v", err)
+	}
+
+	profileData, _ := json.Marshal(f.candidate)
+	profilePath := filepath.Join(artifactsDir, "profile.json")
+	os.WriteFile(profilePath, profileData, 0644)
+
+	attestationData, _ := json.Marshal(attestation)
+	attestationPath := filepath.Join(artifactsDir, "registry_attestation.json")
+	os.WriteFile(attestationPath, attestationData, 0644)
+
+	publicKeyHex := hex.EncodeToString(f.publicKey[:])
+	publicKeyPath := filepath.Join(artifactsDir, "e2e-public-key-tcp.hex")
+	os.WriteFile(publicKeyPath, []byte(publicKeyHex), 0644)
+
+	t.Logf("E2E-02 TCP artifacts written to %s", artifactsDir)
+}
