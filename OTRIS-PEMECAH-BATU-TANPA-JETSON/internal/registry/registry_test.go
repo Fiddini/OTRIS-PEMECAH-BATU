@@ -51,6 +51,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	m.ParserIdentity, m.DeviceFingerprint, m.DeviceIdentityRef = "generic_hl7_v2", "fixture-fp", "fixture-device"
+	m.NormalizerIdentity = "otris.normalizer.exact-evidence-mapping.v1"
 	bundle := evidence.ClaimReview{Claim: m.Claim(), Evidence: []evidence.Evidence{
 		{Type: "VENDOR_MANUAL", Ref: "fixture:manual"},
 		{Type: "SIMULATOR_LOG", Ref: "fixture:measurement"},
@@ -128,8 +129,8 @@ func TestAdmitLiveGovernedChain(t *testing.T) {
 		t.Fatalf("fresh attestation rejected: %v", err)
 	}
 	// Governed inputs keep their own statuses; admission promotes nothing.
-	if f.candidate.Status != "CANDIDATE" || f.candidate.ValidationStatus != "CANDIDATE" {
-		t.Fatal("candidate promoted by admission")
+	if f.candidate.GovernanceStatus != "CANDIDATE" {
+		t.Fatal("candidate governance status promoted by admission")
 	}
 	if f.approval.ApprovalStatus != approval.StatusEngineerApproved || f.approval.Decision != approval.DecisionApprove {
 		t.Fatal("approval changed by admission")
@@ -518,4 +519,67 @@ func TestSequenceIsSignedAndMonotonicityIsNotProven(t *testing.T) {
 	if fmt.Sprint(older.Sequence, newer.Sequence) != "1 2" {
 		t.Fatal("unexpected fixture sequences")
 	}
+}
+
+// E2E-01b: WIJOYO Producer — creates real governed artifacts for Edge consumption.
+//
+// Uses REAL production APIs:
+// - profilebuilder.BuildFromMappingDefinition()
+// - approval.Review()
+// - registry.Admit()
+//
+// Writes to E2E_ARTIFACTS_DIR:
+// - profile.json
+// - registry_attestation.json
+// - e2e-public-key.hex (public key as hex string)
+//
+// Fails if E2E_ARTIFACTS_DIR is not set (optional test).
+func TestProduceE2E01b(t *testing.T) {
+	// Check if this is E2E mode
+	artifactsDir := os.Getenv("E2E_ARTIFACTS_DIR")
+	if artifactsDir == "" {
+		t.Skip("E2E_ARTIFACTS_DIR not set; skipping E2E producer")
+	}
+
+	// Use real fixture creation (evidence review, replay validation)
+	f := newFixture(t)
+
+	// Call real registry.Admit() with fixture data
+	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, "e2e-test-issuer-01b", 1)
+	if err != nil {
+		t.Fatalf("registry.Admit failed: %v", err)
+	}
+
+	// Verify the attestation we just created with real production verification
+	if err := registry.VerifyAttestation(attestation, f.candidate, f.publicKey, "e2e-test-issuer-01b"); err != nil {
+		t.Fatalf("attestation verification failed: %v", err)
+	}
+
+	// Write real artifacts to E2E_ARTIFACTS_DIR
+	profileData, err := json.Marshal(f.candidate)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	profilePath := filepath.Join(artifactsDir, "profile.json")
+	if err := os.WriteFile(profilePath, profileData, 0644); err != nil {
+		t.Fatalf("write profile.json: %v", err)
+	}
+
+	attestationData, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatalf("marshal attestation: %v", err)
+	}
+	attestationPath := filepath.Join(artifactsDir, "registry_attestation.json")
+	if err := os.WriteFile(attestationPath, attestationData, 0644); err != nil {
+		t.Fatalf("write registry_attestation.json: %v", err)
+	}
+
+	// Write public key as hex for Edge to consume
+	publicKeyHex := hex.EncodeToString(f.publicKey[:])
+	publicKeyPath := filepath.Join(artifactsDir, "e2e-public-key.hex")
+	if err := os.WriteFile(publicKeyPath, []byte(publicKeyHex), 0644); err != nil {
+		t.Fatalf("write e2e-public-key.hex: %v", err)
+	}
+
+	t.Logf("E2E-01b artifacts written to %s", artifactsDir)
 }

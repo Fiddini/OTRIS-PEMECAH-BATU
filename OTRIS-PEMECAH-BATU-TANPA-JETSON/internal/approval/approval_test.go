@@ -104,8 +104,8 @@ func TestReviewExactCandidate(t *testing.T) {
 	if string(jsonBytes(t, f.candidate)) != beforeCandidate || string(jsonBytes(t, f.mapping)) != beforeMapping {
 		t.Fatal("review mutated governed input")
 	}
-	if f.candidate.Status != "CANDIDATE" || f.candidate.ValidationStatus != "CANDIDATE" {
-		t.Fatal("candidate promoted")
+	if f.candidate.GovernanceStatus != "CANDIDATE" {
+		t.Fatal("candidate governance status was modified")
 	}
 	for _, forbidden := range []string{"VERIFIED", "REAL_DEVICE_VALIDATED", "PRODUCTION_VALIDATED", "REGISTERED", "CONNECTED", "ACTIVE"} {
 		if strings.Contains(string(jsonBytes(t, a)), forbidden) {
@@ -127,9 +127,7 @@ func TestReviewRejectsInvalidCandidate(t *testing.T) {
 		edit func(*profilebuilder.Profile)
 	}{
 		{"zero", func(p *profilebuilder.Profile) { *p = profilebuilder.Profile{} }},
-		{"status", func(p *profilebuilder.Profile) { p.Status = "ENGINEER_APPROVED" }},
-		{"validation-status", func(p *profilebuilder.Profile) { p.ValidationStatus = "VERIFIED" }},
-		{"legacy", func(p *profilebuilder.Profile) { p.Status = "LEGACY_UNTRUSTED" }},
+		{"governance-not-candidate", func(p *profilebuilder.Profile) { p.GovernanceStatus = "PRODUCTION_VALIDATED" }},
 		{"profile-id-missing", func(p *profilebuilder.Profile) { p.ProfileID = "" }},
 		{"profile-id-substitution", func(p *profilebuilder.Profile) { p.ProfileID += "-other" }},
 		{"version-missing", func(p *profilebuilder.Profile) { p.Version = "" }},
@@ -191,9 +189,9 @@ func TestReviewRejectsInvalidCandidate(t *testing.T) {
 			if err := json.Unmarshal(original, &p); err != nil {
 				t.Fatal(err)
 			}
-			p.Status, p.ValidationStatus = injected, injected
+			p.GovernanceStatus = injected
 			if a, err := approval.Review(&p, f.mapping, "engineer", approval.DecisionApprove); err == nil || a != nil {
-				t.Fatal("injected status became approval authority")
+				t.Fatal("injected governance status became approval authority")
 			}
 		})
 	}
@@ -331,6 +329,8 @@ func TestDigestBindingCoversEveryCandidateField(t *testing.T) {
 				field.SetString(field.String() + "-changed")
 			case reflect.Float64:
 				field.SetFloat(field.Float() + 1)
+			case reflect.Bool:
+				field.SetBool(!field.Bool())
 			case reflect.Slice:
 				field.Set(reflect.Append(field, reflect.Zero(field.Type().Elem())))
 			default:
