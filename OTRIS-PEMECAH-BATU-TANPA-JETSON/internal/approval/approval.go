@@ -193,7 +193,7 @@ func candidateDigest(p *profilebuilder.Profile, m *mapping.MappingDefinition) ([
 	mapped := p.Mapping[0]
 	if mapped.SourcePos != claim.SourcePosition || mapped.SourceCode != claim.SourceCode ||
 		mapped.SourceUnit != claim.SourceUnit || mapped.Canonical != claim.CanonicalConcept ||
-		mapped.Unit != claim.CanonicalUnit {
+		mapped.Unit != claim.CanonicalUnit || mapped.Confidence != 0 {
 		return empty, errors.New("candidate field mapping mismatch")
 	}
 	// ponytail: D3F's fixed four-entry chain. Update this check only with an approved candidate schema change.
