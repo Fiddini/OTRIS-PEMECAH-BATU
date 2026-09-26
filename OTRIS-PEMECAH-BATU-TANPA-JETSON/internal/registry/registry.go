@@ -175,8 +175,8 @@ func checkGovernedBindings(p *profilebuilder.Profile, m *mapping.MappingDefiniti
 	if status != mapping.StatusReplayValidated {
 		return errors.New("live mapping must be REPLAY_VALIDATED")
 	}
-	if p.Status != "CANDIDATE" || p.ValidationStatus != "CANDIDATE" {
-		return errors.New("candidate must remain CANDIDATE/CANDIDATE")
+	if p.GovernanceStatus != "CANDIDATE" {
+		return errors.New("governance_status must remain CANDIDATE (not yet approved for production)")
 	}
 	if a.ApprovalStatus != approval.StatusEngineerApproved || a.Decision != approval.DecisionApprove {
 		return errors.New("approval must be an ENGINEER_APPROVED APPROVE decision")

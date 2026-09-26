@@ -149,8 +149,8 @@ func candidateDigest(p *profilebuilder.Profile, m *mapping.MappingDefinition) ([
 	if status != mapping.StatusReplayValidated {
 		return empty, errors.New("live mapping must be REPLAY_VALIDATED")
 	}
-	if p.Status != "CANDIDATE" || p.ValidationStatus != "CANDIDATE" {
-		return empty, errors.New("profile must be CANDIDATE/CANDIDATE")
+	if p.GovernanceStatus != "CANDIDATE" {
+		return empty, errors.New("governance_status must be CANDIDATE (not yet approved for production)")
 	}
 	for _, field := range []struct{ name, value string }{
 		{"profile_id", p.ProfileID}, {"version", p.Version},
