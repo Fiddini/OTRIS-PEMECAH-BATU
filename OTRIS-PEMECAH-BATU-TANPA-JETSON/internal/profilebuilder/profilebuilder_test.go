@@ -644,8 +644,8 @@ func TestD3FBuildReplayValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("REPLAY_VALIDATED rejected: %v", err)
 	}
-	if p.Status != "CANDIDATE" || p.ValidationStatus != "CANDIDATE" {
-		t.Fatalf("profile not CANDIDATE: %s/%s", p.Status, p.ValidationStatus)
+	if p.GovernanceStatus != "CANDIDATE" {
+		t.Fatalf("profile not CANDIDATE: %s", p.GovernanceStatus)
 	}
 }
 

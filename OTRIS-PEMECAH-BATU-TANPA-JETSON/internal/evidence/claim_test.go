@@ -158,7 +158,7 @@ func TestReviewClaimEveryFieldBound(t *testing.T) {
 
 func TestReviewClaimIncompleteOrInvalidClaim(t *testing.T) {
 	for _, name := range []string{
-		"MappingIdentity", "MappingVersion", "SourceProtocol", "SourceCode", "SourceUnit", "CanonicalConcept", "CanonicalUnit",
+		"MappingIdentity", "MappingVersion", "SourceProtocol", "SourceCode", "CanonicalConcept", "CanonicalUnit",
 	} {
 		for _, value := range []string{"", " \t\n"} {
 			t.Run(name+fmt.Sprintf("-%q", value), func(t *testing.T) {

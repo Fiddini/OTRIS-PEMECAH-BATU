@@ -10,6 +10,7 @@ import (
 
     "github.com/otris-id/otris-pemecah-batu/internal/approval"
     "github.com/otris-id/otris-pemecah-batu/internal/auth"
+	"github.com/otris-id/otris-pemecah-batu/internal/candidate"
 	"github.com/otris-id/otris-pemecah-batu/internal/capture"
 	"github.com/otris-id/otris-pemecah-batu/internal/license"
 	"github.com/otris-id/otris-pemecah-batu/internal/telemetry"
@@ -413,7 +414,44 @@ Admission requires a new --out directory; approval.json is audit data only.`,
         },
     }
 
-    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd)
+    // PB-13 build candidates from real device
+    buildCandidatesCmd := &cobra.Command{
+        Use:   "build-candidates [capture-dir]",
+        Short: "PB-13: Build candidate claim records for real device codes (wire provenance only)",
+        Args: cobra.ExactArgs(1),
+        Run: func(cmd *cobra.Command, args []string) {
+            captureDir := args[0]
+            out, _ := cmd.Flags().GetString("out")
+            if out == "" {
+                out = "candidates"
+            }
+
+            fmt.Println("=== PB-13 CANDIDATE BUILDER ===")
+            fmt.Printf("Building candidates from: %s\n", captureDir)
+            fmt.Println("Status: wire provenance only (semantic authority OPEN)")
+
+            candidates, err := candidate.BuildRealDeviceCandidates(captureDir)
+            if err != nil {
+                fmt.Printf("Error building candidates: %v\n", err)
+                os.Exit(1)
+            }
+
+            outPath, err := candidate.SaveCandidatePackage(out, candidates)
+            if err != nil {
+                fmt.Printf("Error saving candidates: %v\n", err)
+                os.Exit(1)
+            }
+
+            fmt.Printf("\n✓ Candidates saved to: %s\n", outPath)
+            for code, c := range candidates {
+                fmt.Printf("  [%s] %s v%s - awaiting: %v\n", code, c.MappingIdentity, c.MappingVersion, c.AwaitingAuthority)
+            }
+            fmt.Println("\nNext step: provide semantic authority + ground truth, then ReviewClaim → ReviewReplay → BuildFromMappingDefinition")
+        },
+    }
+    buildCandidatesCmd.Flags().String("out", "", "output directory for candidate records")
+
+    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd)
 
     
     var registerCmd = &cobra.Command{
