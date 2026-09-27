@@ -296,7 +296,7 @@ func splitFrames(data []byte) [][]byte {
 				return [][]byte{nil} // Do not discard malformed MLLP or its trailing data.
 			}
 			frames = append(frames, data[1:end])
-			data = bytes.Trim(data[end+2:], "\r\n")
+			data = data[end+2:]
 		}
 		return frames
 	}

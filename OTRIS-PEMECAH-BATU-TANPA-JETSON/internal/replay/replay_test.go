@@ -523,3 +523,57 @@ func TestValidateHL7Frame(t *testing.T) {
 		})
 	}
 }
+
+// Regression test: Multiple complete MLLP frames are not corrupted by splitFrames
+// Bug fix: bytes.Trim(data[end+2:], "\r\n") was destructively removing trailing 0x0D
+// from MLLP terminators, preventing later frames from being extracted.
+func TestMultipleMllpFramesNotCorrupted(t *testing.T) {
+	tmpDir := t.TempDir()
+	rawPath := filepath.Join(tmpDir, "raw_stream.bin")
+
+	// Construct 3 complete MLLP frames with HL7 segments
+	// Frame 1: 0x0B MSH|... 0x0D PID|... 0x0D 0x1C 0x0D
+	// Frame 2: 0x0B MSH|... 0x0D 0x1C 0x0D
+	// Frame 3: 0x0B MSH|... 0x0D 0x1C 0x0D
+	frame1 := []byte{0x0B}
+	frame1 = append(frame1, []byte("MSH|^~\\&|SendingApp|SendingFac|ReceivingApp|ReceivingFac|20260101120000||ADT^A01|MSG00001|P|2.5")...)
+	frame1 = append(frame1, 0x0D)
+	frame1 = append(frame1, []byte("PID|1||12345^^^MRN||DOE^JOHN^A||19700101|M")...)
+	frame1 = append(frame1, 0x0D)
+	frame1 = append(frame1, []byte{0x1C, 0x0D}...)
+
+	frame2 := []byte{0x0B}
+	frame2 = append(frame2, []byte("MSH|^~\\&|SendingApp|SendingFac|ReceivingApp|ReceivingFac|20260101120001||ADT^A01|MSG00002|P|2.5")...)
+	frame2 = append(frame2, 0x0D)
+	frame2 = append(frame2, []byte{0x1C, 0x0D}...)
+
+	frame3 := []byte{0x0B}
+	frame3 = append(frame3, []byte("MSH|^~\\&|SendingApp|SendingFac|ReceivingApp|ReceivingFac|20260101120002||ADT^A01|MSG00003|P|2.5")...)
+	frame3 = append(frame3, 0x0D)
+	frame3 = append(frame3, []byte{0x1C, 0x0D}...)
+
+	multiFrame := append(frame1, frame2...)
+	multiFrame = append(multiFrame, frame3...)
+
+	err := os.WriteFile(rawPath, multiFrame, 0644)
+	if err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	report, err := RunWithOptions(tmpDir, 10, ReplayOptions{})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify that all frames were extracted and at least some segments parsed
+	if report.Success == 0 {
+		t.Errorf("expected success > 0 for 3 complete MLLP frames, got %d", report.Success)
+	}
+
+	// Verify that frames were not returned as nil (which would happen with the bug)
+	if report.FailedParse > report.Success {
+		t.Errorf("expected more successes than failures; got success=%d, failed_parse=%d",
+			report.Success, report.FailedParse)
+	}
+}
