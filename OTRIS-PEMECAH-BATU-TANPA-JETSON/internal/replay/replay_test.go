@@ -524,6 +524,55 @@ func TestValidateHL7Frame(t *testing.T) {
 	}
 }
 
+// TestValidateHL7SegmentIDWithDigits tests segment IDs containing digits (HL7 v2 standard)
+func TestValidateHL7SegmentIDWithDigits(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame string
+		valid bool
+	}{
+		{
+			name:  "valid PV1 segment (letter-letter-digit)",
+			frame: "PV1|1|I|OPERASI^^12|||||||||F||",
+			valid: true,
+		},
+		{
+			name:  "valid OBR segment (letter-letter-letter)",
+			frame: "OBR|1|845439^GHH LAB||1234-5^Blood Work^LN|||20130101120000",
+			valid: true,
+		},
+		{
+			name:  "invalid 1V1 (digit-letter-letter)",
+			frame: "1V1|1|I|OPERASI",
+			valid: false,
+		},
+		{
+			name:  "invalid Pv1 (mixed case)",
+			frame: "Pv1|1|I|OPERASI",
+			valid: false,
+		},
+		{
+			name:  "invalid PV- (non-alphanumeric)",
+			frame: "PV-|1|I|OPERASI",
+			valid: false,
+		},
+		{
+			name:  "invalid PV1X (too many characters before pipe)",
+			frame: "PV1X|data",
+			valid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := validateHL7Frame(tt.frame)
+			if result != tt.valid {
+				t.Errorf("validateHL7Frame(%q): expected %v, got %v", tt.frame, tt.valid, result)
+			}
+		})
+	}
+}
+
 // Regression test: Multiple complete MLLP frames are not corrupted by splitFrames
 // Bug fix: bytes.Trim(data[end+2:], "\r\n") was destructively removing trailing 0x0D
 // from MLLP terminators, preventing later frames from being extracted.

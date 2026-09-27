@@ -230,8 +230,15 @@ func validateHL7Frame(text string) bool {
 	if len(text) < 4 || text[3] != '|' {
 		return false
 	}
-	for _, c := range text[:3] {
-		if c < 'A' || c > 'Z' {
+	// HL7 segment IDs: 3 characters
+	// Position 0: uppercase letter A-Z (mandatory)
+	// Positions 1-2: uppercase letter A-Z or digit 0-9
+	c := text[0]
+	if c < 'A' || c > 'Z' {
+		return false
+	}
+	for _, c := range text[1:3] {
+		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 			return false
 		}
 	}
