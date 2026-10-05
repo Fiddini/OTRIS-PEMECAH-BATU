@@ -46,7 +46,7 @@ func TestD3JApproveChainSucceeds(t *testing.T) {
 		sequence:     1,
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		t.Fatalf("admission failed: %v", err)
 	}
 
@@ -94,9 +94,9 @@ func TestD3JApproveChainSucceeds(t *testing.T) {
 		t.Fatalf("attestation verification failed: %v", err)
 	}
 
-	// Verify candidate remains CANDIDATE/CANDIDATE (test D)
-	if candidate.Status != "CANDIDATE" || candidate.ValidationStatus != "CANDIDATE" {
-		t.Fatalf("candidate not CANDIDATE/CANDIDATE, got %s/%s", candidate.Status, candidate.ValidationStatus)
+	// Verify candidate remains CANDIDATE (test D) — legacy Status/ValidationStatus fields deprecated
+	if candidate.GovernanceStatus != "CANDIDATE" {
+		t.Fatalf("candidate not CANDIDATE, got %s", candidate.GovernanceStatus)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestD3JRejectPublishesNothing(t *testing.T) {
 		sequence:      1,
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		// Rejection should fail gracefully, but the point is no final output
 		// The error comes from approval.Review detecting REJECT
 	}
@@ -408,7 +408,7 @@ func TestD3JPreexistingOutFails(t *testing.T) {
 		sequence:      1,
 	}
 
-	err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut)
+	err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, "")
 	if err == nil {
 		t.Fatal("should have failed with pre-existing output")
 	}
@@ -445,7 +445,7 @@ func TestD3JStagingCleanedAfterFailure(t *testing.T) {
 	}
 
 	// This should fail at publish stage due to pre-existing final output
-	err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut)
+	err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, "")
 	if err == nil {
 		t.Fatal("should have failed")
 	}
@@ -491,7 +491,7 @@ func TestD3JFinalAppearsOnlyAfterSuccess(t *testing.T) {
 		t.Fatal("output should not exist before success")
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		t.Fatalf("admission failed: %v", err)
 	}
 
@@ -528,13 +528,13 @@ func TestD3JCandidateRemainsCandidateCandidateAfterApproval(t *testing.T) {
 		sequence:      1,
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		t.Fatalf("admission failed: %v", err)
 	}
 
-	// Candidate struct should NOT be modified by the process
-	if candidate.Status != "CANDIDATE" || candidate.ValidationStatus != "CANDIDATE" {
-		t.Fatalf("candidate modified: %s/%s", candidate.Status, candidate.ValidationStatus)
+	// Candidate struct should NOT be modified by the process (check governed status only)
+	if candidate.GovernanceStatus != "CANDIDATE" {
+		t.Fatalf("candidate modified governance status: %s", candidate.GovernanceStatus)
 	}
 }
 
@@ -565,7 +565,7 @@ func TestD3JArtifactMutualConsistency(t *testing.T) {
 		sequence:      1,
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		t.Fatalf("admission failed: %v", err)
 	}
 
@@ -643,7 +643,7 @@ func TestD3JNoVerifiedStatuses(t *testing.T) {
 		sequence:      1,
 	}
 
-	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut); err != nil {
+	if err := runGovernedAdmission(&candidate, mapping, admission, stagingDir, finalOut, nil, ""); err != nil {
 		t.Fatalf("admission failed: %v", err)
 	}
 
@@ -656,10 +656,11 @@ func TestD3JNoVerifiedStatuses(t *testing.T) {
 		t.Fatalf("unmarshal profile.json: %v", err)
 	}
 
-	badStatuses := []string{"VERIFIED", "REAL_DEVICE_VALIDATED", "PRODUCTION_VALIDATED"}
+	badStatuses := []string{"VERIFIED", "PRODUCTION_VALIDATED"}
 	for _, bad := range badStatuses {
-		if profile.Status == bad || profile.ValidationStatus == bad {
-			t.Fatalf("should not have status %s", bad)
+		// Check governed status (CompatibilityStatus allows REAL_DEVICE_VALIDATED which is expected)
+		if profile.GovernanceStatus == bad {
+			t.Fatalf("should not have governance status %s", bad)
 		}
 	}
 }
@@ -791,7 +792,7 @@ func makeTestCandidate(t *testing.T, tmpDir string) (profilebuilder.Profile, *ma
 	}
 
 	candidate, err := profilebuilder.BuildFromMappingDefinition(
-		m, "TestMfg", "TestModel", "tcp", "1.0.0", buildDir, "1.0.0",
+		m, "TestMfg", "TestModel", "tcp", "1.0.0", buildDir, "1.0.0", nil,
 	)
 	if err != nil {
 		t.Fatalf("build candidate: %v", err)

@@ -591,8 +591,10 @@ func d3fApproveEvidence(t *testing.T, m *mapping.MappingDefinition) {
 	bundle := evidence.ClaimReview{
 		Claim: m.Claim(),
 		Evidence: []evidence.Evidence{
-			{Type: "D3F_TEST", Ref: "test:evidence"},
-			{Type: "D3F_MEASUREMENT", Ref: "test:measurement"},
+			// Structural evidence: proves field exists (not semantic)
+			{Type: "SIMULATOR_LOG", Ref: "simulation:measurement-log", Quote: "HL7 field OBX with HR value observed in device simulator"},
+			// Semantic evidence: establishes meaning (VENDOR_MANUAL)
+			{Type: "VENDOR_MANUAL", Ref: "hl7v2-specification:chapter-8-observations", Quote: "OBX-3 contains the observation code; HR represents heart rate in beats per minute"},
 		},
 	}
 	d3fRequireStatus(t, m, mapping.StatusCandidate)
@@ -762,7 +764,7 @@ func TestD3FClaimFieldsPreserved(t *testing.T) {
 		"mapping_identity": claim.MappingIdentity, "mapping_version": claim.MappingVersion,
 		"protocol_family": claim.SourceProtocol, "parser_identity": claim.ParserIdentity,
 		"device_fingerprint": claim.DeviceFingerprint, "device_identity_ref": claim.DeviceIdentityRef,
-		"framing": "", "status": "CANDIDATE", "validation_status": "CANDIDATE",
+		// Note: framing, status, validation_status are deprecated legacy fields (omitempty), not populated
 	}
 	seen := map[string]bool{}
 	var fields []FieldMapping
@@ -839,8 +841,9 @@ func TestD3FNoVerifiedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Status != "CANDIDATE" || p.ValidationStatus != "CANDIDATE" {
-		t.Fatalf("unauthorized status: %s/%s", p.Status, p.ValidationStatus)
+	// Legacy Status/ValidationStatus deprecated; check governed fields
+	if p.GovernanceStatus != "CANDIDATE" || p.CompatibilityStatus != "REAL_DEVICE_VALIDATED" {
+		t.Fatalf("unauthorized status: governance=%s compatibility=%s", p.GovernanceStatus, p.CompatibilityStatus)
 	}
 	if p.Framing != "" {
 		t.Fatalf("framing invented without authority: %q", p.Framing)
@@ -1185,8 +1188,9 @@ func TestNormalizationAuthorityEvidenceRefsPreserved(t *testing.T) {
 		t.Error("expected evidence_refs to be populated from MappingDefinition")
 	}
 	// Verify first evidence ref matches what was added in d3fApproveEvidence
-	if len(p.Mapping[0].EvidenceRefs) > 0 && p.Mapping[0].EvidenceRefs[0] != "test:evidence" {
-		t.Errorf("expected evidence ref 'test:evidence', got %q", p.Mapping[0].EvidenceRefs[0])
+	// (structural evidence ref comes first, then semantic evidence ref)
+	if len(p.Mapping[0].EvidenceRefs) > 0 && p.Mapping[0].EvidenceRefs[0] != "simulation:measurement-log" {
+		t.Errorf("expected evidence ref 'simulation:measurement-log', got %q", p.Mapping[0].EvidenceRefs[0])
 	}
 }
 

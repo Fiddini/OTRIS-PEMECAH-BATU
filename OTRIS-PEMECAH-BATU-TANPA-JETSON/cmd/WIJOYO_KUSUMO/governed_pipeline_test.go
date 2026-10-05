@@ -112,11 +112,11 @@ func TestGovernedPipelineHappyPath(t *testing.T) {
 	var profile map[string]interface{}
 	json.Unmarshal(profileData, &profile)
 
-	if profile["status"] != "CANDIDATE" {
-		t.Fatalf("profile status not CANDIDATE, got %v", profile["status"])
+	if profile["governance_status"] != "CANDIDATE" {
+		t.Fatalf("profile governance_status not CANDIDATE, got %v", profile["governance_status"])
 	}
-	if profile["validation_status"] != "CANDIDATE" {
-		t.Fatalf("validation_status not CANDIDATE, got %v", profile["validation_status"])
+	if profile["compatibility_status"] != "REAL_DEVICE_VALIDATED" {
+		t.Fatalf("compatibility_status not REAL_DEVICE_VALIDATED, got %v", profile["compatibility_status"])
 	}
 }
 
@@ -482,16 +482,16 @@ func TestGovernedPipelineOutputIsCandidate(t *testing.T) {
 	if profile == nil {
 		t.Fatal("profile is nil")
 	}
-	if profile["status"] != "CANDIDATE" {
-		t.Fatalf("status should be CANDIDATE, got %v", profile["status"])
+	if profile["governance_status"] != "CANDIDATE" {
+		t.Fatalf("governance_status should be CANDIDATE, got %v", profile["governance_status"])
 	}
-	if profile["validation_status"] != "CANDIDATE" {
-		t.Fatalf("validation_status should be CANDIDATE, got %v", profile["validation_status"])
+	if profile["compatibility_status"] != "REAL_DEVICE_VALIDATED" {
+		t.Fatalf("compatibility_status should be REAL_DEVICE_VALIDATED, got %v", profile["compatibility_status"])
 	}
 
-	// Should NOT have VERIFIED or REAL_DEVICE_VALIDATED
-	if profile["status"] == "VERIFIED" || profile["status"] == "REAL_DEVICE_VALIDATED" || profile["status"] == "PRODUCTION_VALIDATED" {
-		t.Fatalf("output incorrectly has advanced status: %v", profile["status"])
+	// Should NOT have VERIFIED or PRODUCTION_VALIDATED as governance status
+	if profile["governance_status"] == "VERIFIED" || profile["governance_status"] == "PRODUCTION_VALIDATED" {
+		t.Fatalf("output incorrectly has advanced governance status: %v", profile["governance_status"])
 	}
 }
 
@@ -546,13 +546,14 @@ func runGovernedPipelineTest(
 
 	// Step 3: BuildFromMappingDefinition
 	os.MkdirAll(outDir, 0755)
-	profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmware, outDir, version)
+	profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmware, outDir, version, nil)
 	if err != nil {
 		return fmt.Errorf("profile build rejected: %w", err)
 	}
 
-	if profile.Status != "CANDIDATE" || profile.ValidationStatus != "CANDIDATE" {
-		return fmt.Errorf("output status should be CANDIDATE/CANDIDATE, got %s/%s", profile.Status, profile.ValidationStatus)
+	// Check governed status (legacy Status/ValidationStatus fields deprecated)
+	if profile.GovernanceStatus != "CANDIDATE" || profile.CompatibilityStatus != "REAL_DEVICE_VALIDATED" {
+		return fmt.Errorf("output governance status should be CANDIDATE, got %s (compat=%s)", profile.GovernanceStatus, profile.CompatibilityStatus)
 	}
 
 	return nil

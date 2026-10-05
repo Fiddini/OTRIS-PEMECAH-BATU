@@ -63,7 +63,7 @@ func newFixture(t *testing.T) fixture {
 	if _, err := mapping.ReviewReplay(m, dir, 2, replay.ReplayOptions{GroundTruthPath: truth}, filepath.Join(dir, "replay-report.json")); err != nil {
 		t.Fatal(err)
 	}
-	p, err := profilebuilder.BuildFromMappingDefinition(m, "Fixture Maker", "Device Q", "serial", "fw-3", filepath.Join(dir, "profile"), "profile-9")
+	p, err := profilebuilder.BuildFromMappingDefinition(m, "Fixture Maker", "Device Q", "serial", "fw-3", filepath.Join(dir, "profile"), "profile-9", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

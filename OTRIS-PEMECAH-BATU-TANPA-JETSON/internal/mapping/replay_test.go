@@ -46,7 +46,8 @@ func approveReplayClaim(t *testing.T, m *mapping.MappingDefinition) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "claim-input.json")
 	bundle := evidence.ClaimReview{Claim: m.Claim(), Evidence: []evidence.Evidence{
-		{Type: "TEST_MANUAL", Ref: "test:manual"}, {Type: "TEST_MEASUREMENT", Ref: "test:measurement"},
+		{Type: "SIMULATOR_LOG", Ref: "simulation:measurement", Quote: "HL7 field OBX with HR value"},
+		{Type: "VENDOR_MANUAL", Ref: "hl7v2-specification:chapter-8-observations", Quote: "OBX-3 contains observation code; HR represents heart rate"},
 	}}
 	writeReplayInput(t, path, replayJSON(t, bundle))
 	if err := mapping.ReviewEvidence(m, path, filepath.Join(dir, "evidence-report.json")); err != nil {
