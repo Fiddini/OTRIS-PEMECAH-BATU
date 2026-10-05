@@ -45,24 +45,25 @@ type QCBinding struct {
 // Attestation is persistable. Unlike D3H approval, its authority is the signature
 // over canonical payload bytes, so verification needs no live governed process.
 type Attestation struct {
-	SchemaVersion     string    `json:"schema_version"`
-	AdmissionStatus   string    `json:"admission_status"`
-	ProfileID         string    `json:"profile_id"`
-	ProfileVersion    string    `json:"profile_version"`
-	CandidateDigest   string    `json:"candidate_digest"`
-	MappingIdentity   string    `json:"mapping_identity"`
-	MappingVersion    string    `json:"mapping_version"`
-	EvidenceReference string    `json:"evidence_reference"`
-	ReplayValidatedAt time.Time `json:"replay_validated_at"`
-	MappingProvenance string    `json:"mapping_provenance"`
-	ProvenanceAuthor  string    `json:"provenance_author"`
-	ApproverIdentity  string    `json:"approver_identity"`
-	ApprovalTimestamp time.Time `json:"approval_timestamp"`
-	IssuerKeyID       string    `json:"issuer_key_id"`
-	IssuedAt          time.Time `json:"issued_at"`
-	Sequence          uint64    `json:"sequence"`
-	QC                *QCBinding `json:"qc,omitempty"`           // QC governance binding (optional)
-	Signature         string    `json:"signature"`
+	SchemaVersion          string    `json:"schema_version"`
+	AdmissionStatus        string    `json:"admission_status"`
+	ProfileID              string    `json:"profile_id"`
+	ProfileVersion         string    `json:"profile_version"`
+	CandidateDigest        string    `json:"candidate_digest"`
+	MappingIdentity        string    `json:"mapping_identity"`
+	MappingVersion         string    `json:"mapping_version"`
+	EvidenceReference      string    `json:"evidence_reference"`
+	SemanticEvidenceDigest string    `json:"semantic_evidence_digest,omitempty"` // SHA256 of semantic evidence (established by C1)
+	ReplayValidatedAt      time.Time `json:"replay_validated_at"`
+	MappingProvenance      string    `json:"mapping_provenance"`
+	ProvenanceAuthor       string    `json:"provenance_author"`
+	ApproverIdentity       string    `json:"approver_identity"`
+	ApprovalTimestamp      time.Time `json:"approval_timestamp"`
+	IssuerKeyID            string    `json:"issuer_key_id"`
+	IssuedAt               time.Time `json:"issued_at"`
+	Sequence               uint64    `json:"sequence"`
+	QC                     *QCBinding `json:"qc,omitempty"`           // QC governance binding (optional)
+	Signature              string    `json:"signature"`
 }
 
 // Admit requires live governed authority in this process and returns a signed
@@ -118,7 +119,8 @@ func Admit(
 		ProfileID: candidate.ProfileID, ProfileVersion: candidate.Version,
 		CandidateDigest: digest,
 		MappingIdentity: liveMapping.MappingIdentity, MappingVersion: liveMapping.MappingVersion,
-		EvidenceReference: liveMapping.EvidenceGateReportRef, ReplayValidatedAt: liveMapping.ReplayValidatedAt,
+		EvidenceReference: liveMapping.EvidenceGateReportRef, SemanticEvidenceDigest: liveMapping.SemanticEvidenceDigest,
+		ReplayValidatedAt: liveMapping.ReplayValidatedAt,
 		MappingProvenance: liveMapping.Provenance, ProvenanceAuthor: liveMapping.ProvenanceAuthor,
 		ApproverIdentity: engineerApproval.ApproverIdentity, ApprovalTimestamp: engineerApproval.ApprovedAt,
 		IssuerKeyID: issuerKeyID, IssuedAt: time.Now().UTC(), Sequence: sequence,
@@ -197,6 +199,9 @@ func VerifyAttestation(a *Attestation, candidate *profilebuilder.Profile, truste
 	}
 	if candidate.MappingProvenance != a.MappingProvenance || candidate.EvidenceReference != a.EvidenceReference {
 		return errors.New("candidate provenance or evidence reference mismatch")
+	}
+	if candidate.SemanticEvidenceDigest != a.SemanticEvidenceDigest {
+		return errors.New("candidate semantic evidence digest mismatch")
 	}
 	return nil
 }
@@ -286,6 +291,7 @@ func (a *Attestation) canonicalPayload() ([]byte, error) {
 	fields := []string{
 		a.SchemaVersion, a.AdmissionStatus, a.ProfileID, a.ProfileVersion, a.CandidateDigest,
 		a.MappingIdentity, a.MappingVersion, a.EvidenceReference,
+		a.SemanticEvidenceDigest, // Semantic evidence digest bound in canonical payload
 		a.ReplayValidatedAt.UTC().Format(time.RFC3339Nano),
 		a.MappingProvenance, a.ProvenanceAuthor, a.ApproverIdentity,
 		a.ApprovalTimestamp.UTC().Format(time.RFC3339Nano),
@@ -298,7 +304,9 @@ func (a *Attestation) canonicalPayload() ([]byte, error) {
 		if !utf8.ValidString(value) {
 			return nil, fmt.Errorf("invalid UTF-8 in canonical field %d", i)
 		}
-		if strings.TrimSpace(value) == "" {
+		// SemanticEvidenceDigest (field 8) may be empty (omitempty if not bound)
+		// All other fields are required
+		if i != 8 && strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("missing canonical field %d", i)
 		}
 		fmt.Fprintf(&payload, "%d:%s\n", len(value), value)

@@ -102,6 +102,7 @@ func ReviewEvidence(m *MappingDefinition, evidencePath, reportPath string) error
 	m.EvidenceGateReportRef = reportPath
 	m.EvidenceGateVerdict = report.Verdict
 	m.EvidenceApprovedAt = before.approvedAt
+	m.SemanticEvidenceDigest = report.SemanticEvidenceDigest // Preserve semantic evidence digest
 	m.approval = &before
 	m.status = StatusEvidenceApproved
 	return nil

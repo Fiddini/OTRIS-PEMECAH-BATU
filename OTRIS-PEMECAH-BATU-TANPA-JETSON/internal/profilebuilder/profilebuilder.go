@@ -41,6 +41,8 @@ type Profile struct {
 	AuthorityChain         []string       `yaml:"authority_chain" json:"authority_chain"`
 	NormalizationAuthority bool           `yaml:"normalization_authority" json:"normalization_authority"`
 	NormalizerIdentity     string         `yaml:"normalizer_identity" json:"normalizer_identity,omitempty"`
+	// Semantic Evidence Binding (established by C1)
+	SemanticEvidenceDigest string `yaml:"semantic_evidence_digest,omitempty" json:"semantic_evidence_digest,omitempty"`
 	// QC Governance (optional, immutable reference only)
 	QCApplicability string `yaml:"qc_applicability,omitempty" json:"qc_applicability,omitempty"`
 	QCVerdict       string `yaml:"qc_verdict,omitempty" json:"qc_verdict,omitempty"`
@@ -164,6 +166,7 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		KnownLimitations:       []string{},
 		NormalizationAuthority: normalizationAuthority,
 		NormalizerIdentity:     m.NormalizerIdentity,
+		SemanticEvidenceDigest: m.SemanticEvidenceDigest,
 		AuthorityChain: []string{
 			fmt.Sprintf("Evidence approved: %s", m.EvidenceGateReportRef),
 			fmt.Sprintf("Replay validated: false_data=0.0 at %s", m.ReplayValidatedAt.Format(time.RFC3339Nano)),
@@ -214,12 +217,13 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		{"evidence_reference", profile.EvidenceReference},
 		{"validated_at", profile.ValidatedAt},
 		{"normalizer_identity", profile.NormalizerIdentity},
+		{"semantic_evidence_digest", profile.SemanticEvidenceDigest},
 		{"qc_applicability", profile.QCApplicability},
 		{"qc_verdict", profile.QCVerdict},
 		{"qc_digest", profile.QCDigest},
 	} {
-		// Skip empty QC fields
-		if strings.HasPrefix(field.name, "qc_") && field.value == "" {
+		// Skip empty optional fields
+		if (strings.HasPrefix(field.name, "qc_") || field.name == "semantic_evidence_digest" || field.name == "normalizer_identity") && field.value == "" {
 			continue
 		}
 		value, err := json.Marshal(field.value)

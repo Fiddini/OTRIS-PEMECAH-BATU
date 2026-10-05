@@ -2,6 +2,8 @@ package evidence
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,9 +39,10 @@ type ClaimReview struct {
 
 // ClaimReport is report data, not an authorization credential.
 type ClaimReport struct {
-	Claim    Claim      `json:"claim"`
-	Evidence []Evidence `json:"evidence"`
-	Verdict  string     `json:"verdict"`
+	Claim                  Claim      `json:"claim"`
+	Evidence               []Evidence `json:"evidence"`
+	Verdict                string     `json:"verdict"`
+	SemanticEvidenceDigest string     `json:"semantic_evidence_digest,omitempty"` // SHA256 of semantic evidence bundle
 }
 
 // ReviewClaim reads fresh evidence and persists its bound result before success.
@@ -94,6 +97,12 @@ func ReviewClaim(claim Claim, evidencePath, reportPath string) (ClaimReport, err
 		// At least one item must be semantic evidence (VENDOR_MANUAL) to establish clinical meaning.
 		// Raw captures/simulator logs prove field existence, not semantics.
 		result.Verdict = VerifySemanticEvidence(claim, result.Evidence)
+
+		// If semantic evidence verified, bind semantic evidence digest.
+		// This digest captures the exact semantic evidence that established meaning.
+		if result.Verdict == ApprovedForMapping {
+			result.SemanticEvidenceDigest = computeSemanticEvidenceDigest(claim, result.Evidence)
+		}
 	}
 	f, err := os.OpenFile(reportPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -105,6 +114,31 @@ func ReviewClaim(claim Claim, evidencePath, reportPath string) (ClaimReport, err
 		return report, errors.Join(fmt.Errorf("write claim report: %w", err), os.Remove(reportPath))
 	}
 	return result, nil
+}
+
+// computeSemanticEvidenceDigest derives deterministic SHA256 digest from semantic evidence.
+// This digest captures the exact evidence content that established semantic authority.
+// Only called when Verdict = APPROVED_FOR_MAPPING (has semantic evidence).
+func computeSemanticEvidenceDigest(claim Claim, evidence []Evidence) string {
+	// Canonical form: deterministic ordering
+	// Claim fields + semantic evidence only (non-semantic excluded)
+	canonical := fmt.Sprintf(
+		"%s|%s|%s|%s|",
+		claim.MappingIdentity,
+		claim.MappingVersion,
+		claim.CanonicalConcept,
+		claim.CanonicalUnit,
+	)
+
+	// Add only semantic evidence items (VENDOR_MANUAL types)
+	for _, ev := range evidence {
+		if IsSemanticEvidence(ev) {
+			canonical += fmt.Sprintf("%s|%s|%s|", ev.Type, ev.Ref, ev.Quote)
+		}
+	}
+
+	hash := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(hash[:])
 }
 
 func validateClaim(claim Claim) error {

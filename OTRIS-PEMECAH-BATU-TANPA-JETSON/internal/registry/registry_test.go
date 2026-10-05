@@ -430,7 +430,8 @@ func TestCanonicalPayloadIsFrozenAndDeterministic(t *testing.T) {
 		ProfileID: "Maker_Device_fw_vp1", ProfileVersion: "p1",
 		CandidateDigest: strings.Repeat("ab", 32),
 		MappingIdentity: "map.id", MappingVersion: "m1",
-		EvidenceReference: "/tmp/evidence-report.json", ReplayValidatedAt: fixed,
+		EvidenceReference: "/tmp/evidence-report.json", SemanticEvidenceDigest: "",
+			ReplayValidatedAt: fixed,
 		MappingProvenance: "explicit claim", ProvenanceAuthor: "author",
 		ApproverIdentity: "engineer", ApprovalTimestamp: fixed.Add(time.Minute),
 		IssuerKeyID: keyID, IssuedAt: fixed.Add(2 * time.Minute), Sequence: 11,
@@ -444,6 +445,7 @@ func TestCanonicalPayloadIsFrozenAndDeterministic(t *testing.T) {
 		"6:map.id\n" +
 		"2:m1\n" +
 		"25:/tmp/evidence-report.json\n" +
+		"0:\n" +
 		"30:2026-02-03T04:05:06.000000007Z\n" +
 		"14:explicit claim\n" +
 		"6:author\n" +

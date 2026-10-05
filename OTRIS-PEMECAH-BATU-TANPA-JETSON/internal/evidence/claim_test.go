@@ -85,6 +85,13 @@ func TestReviewClaimCountAndPersistence(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := ClaimReport{Claim: originalClaim, Evidence: bundle.Evidence, Verdict: tc.verdict}
+			// APPROVED_FOR_MAPPING has SemanticEvidenceDigest bound; others don't
+			if tc.verdict == ApprovedForMapping {
+				want.SemanticEvidenceDigest = report.SemanticEvidenceDigest // Check it's present, not hardcoded
+				if want.SemanticEvidenceDigest == "" {
+					t.Fatal("expected SemanticEvidenceDigest for APPROVED_FOR_MAPPING")
+				}
+			}
 			if !reflect.DeepEqual(report, want) || bundle.Claim != originalClaim {
 				t.Fatalf("report or claim differs: got %+v, want %+v", report, want)
 			}

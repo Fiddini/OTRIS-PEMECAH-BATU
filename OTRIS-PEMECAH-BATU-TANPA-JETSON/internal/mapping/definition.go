@@ -42,6 +42,7 @@ type MappingDefinition struct {
 	DifferentialReportRef  string     `json:"differential_report_ref,omitempty"`   // optional: path to differential_report.json
 	EvidenceRefs           []Evidence `json:"evidence_refs"`                       // evidence items that support this claim
 	EvidenceGateVerdict    string     `json:"evidence_gate_verdict,omitempty"`     // should be APPROVED_FOR_MAPPING when approved
+	SemanticEvidenceDigest string     `json:"semantic_evidence_digest,omitempty"`  // SHA256 of semantic evidence (established by C1)
 
 	// Provenance Chain
 	Provenance       string `json:"provenance"`        // narrative explanation of how claim was determined
