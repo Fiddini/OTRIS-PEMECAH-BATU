@@ -16,6 +16,7 @@ import (
 	"github.com/otris-id/otris-pemecah-batu/internal/approval"
 	"github.com/otris-id/otris-pemecah-batu/internal/mapping"
 	"github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
+	"github.com/otris-id/otris-pemecah-batu/internal/qc"
 )
 
 const (
@@ -30,6 +31,16 @@ const (
 	// domain separates these signatures from any other Ed25519 use in this project.
 	domain = "OTRIS-REGISTRY-ADMISSION"
 )
+
+// QCBinding represents QC governance binding in the registry attestation
+type QCBinding struct {
+	Applicability string    `json:"applicability"`              // "REQUIRED", "OPTIONAL", "NOT_APPLICABLE"
+	Verdict       string    `json:"verdict,omitempty"`          // verdict (only if relevant)
+	Digest        string    `json:"digest,omitempty"`           // QCKnowledgeRecord.Integrity
+	Justification string    `json:"justification,omitempty"`    // for NOT_APPLICABLE
+	ReviewedBy    string    `json:"reviewed_by,omitempty"`      // who reviewed
+	ReviewedAt    time.Time `json:"reviewed_at,omitempty"`      // when reviewed
+}
 
 // Attestation is persistable. Unlike D3H approval, its authority is the signature
 // over canonical payload bytes, so verification needs no live governed process.
@@ -50,6 +61,7 @@ type Attestation struct {
 	IssuerKeyID       string    `json:"issuer_key_id"`
 	IssuedAt          time.Time `json:"issued_at"`
 	Sequence          uint64    `json:"sequence"`
+	QC                *QCBinding `json:"qc,omitempty"`           // QC governance binding (optional)
 	Signature         string    `json:"signature"`
 }
 
@@ -60,6 +72,8 @@ func Admit(
 	candidate *profilebuilder.Profile,
 	liveMapping *mapping.MappingDefinition,
 	engineerApproval *approval.Approval,
+	qcRecord *qc.QCKnowledgeRecord,
+	qcApplicability qc.QCApplicability,
 	issuerKey ed25519.PrivateKey,
 	issuerKeyID string,
 	sequence uint64,
@@ -109,6 +123,28 @@ func Admit(
 		ApproverIdentity: engineerApproval.ApproverIdentity, ApprovalTimestamp: engineerApproval.ApprovedAt,
 		IssuerKeyID: issuerKeyID, IssuedAt: time.Now().UTC(), Sequence: sequence,
 	}
+
+	// Add QC binding if applicable and present
+	if qcApplicability == qc.ApplicabilityRequired && qcRecord != nil && qcRecord.Verdict == qc.VerdictPass {
+		// REQUIRED + PASS: bind QC to attestation
+		a.QC = &QCBinding{
+			Applicability: string(qcApplicability),
+			Verdict:       string(qcRecord.Verdict),
+			Digest:        qcRecord.Integrity,
+			ReviewedBy:    qcRecord.Reviewer,
+			ReviewedAt:    qcRecord.CreatedAt,
+		}
+	} else if qcApplicability == qc.ApplicabilityNotApplicable {
+		// NOT_APPLICABLE: bind justification to attestation
+		a.QC = &QCBinding{
+			Applicability: string(qcApplicability),
+			Justification: qcRecord.Criteria.Justification,
+			ReviewedBy:    qcRecord.Reviewer,
+			ReviewedAt:    qcRecord.CreatedAt,
+		}
+	}
+	// OPTIONAL: only bind if explicitly required by policy (not implemented in initial phase)
+
 	payload, err := a.canonicalPayload()
 	if err != nil {
 		return nil, err
@@ -267,5 +303,22 @@ func (a *Attestation) canonicalPayload() ([]byte, error) {
 		}
 		fmt.Fprintf(&payload, "%d:%s\n", len(value), value)
 	}
+
+	// Include QC binding in canonical form if present (backward-compatible: conditional)
+	if a.QC != nil {
+		qcFields := []string{
+			a.QC.Applicability,
+			a.QC.Verdict,
+			a.QC.Digest,
+			a.QC.Justification,
+		}
+		for i, value := range qcFields {
+			if !utf8.ValidString(value) {
+				return nil, fmt.Errorf("invalid UTF-8 in QC canonical field %d", i)
+			}
+			fmt.Fprintf(&payload, "%d:%s\n", len(value), value)
+		}
+	}
+
 	return []byte(payload.String()), nil
 }

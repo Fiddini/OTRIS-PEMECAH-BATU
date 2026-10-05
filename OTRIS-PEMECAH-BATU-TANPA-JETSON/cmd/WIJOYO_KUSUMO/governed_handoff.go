@@ -16,6 +16,7 @@ import (
 	"github.com/otris-id/otris-pemecah-batu/internal/approval"
 	"github.com/otris-id/otris-pemecah-batu/internal/mapping"
 	"github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
+	"github.com/otris-id/otris-pemecah-batu/internal/qc"
 	"github.com/otris-id/otris-pemecah-batu/internal/registry"
 )
 
@@ -115,6 +116,8 @@ func runGovernedAdmission(
 	liveMapping *mapping.MappingDefinition,
 	in admissionInputs,
 	stagingDir, finalOutDir string,
+	qcRecord *qc.QCKnowledgeRecord,
+	qcApplicability qc.QCApplicability,
 ) error {
 	issuerKey, err := loadIssuerKey(in.issuerKeyPath)
 	if err != nil {
@@ -126,7 +129,7 @@ func runGovernedAdmission(
 	if err != nil {
 		return fmt.Errorf("engineer approval: %w", err)
 	}
-	attestation, err := registry.Admit(candidate, liveMapping, engineerApproval, issuerKey, in.issuerKeyID, in.sequence)
+	attestation, err := registry.Admit(candidate, liveMapping, engineerApproval, qcRecord, qcApplicability, issuerKey, in.issuerKeyID, in.sequence)
 	if err != nil {
 		return fmt.Errorf("registry admission: %w", err)
 	}

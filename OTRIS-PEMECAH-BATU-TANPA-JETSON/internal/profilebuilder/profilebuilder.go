@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/otris-id/otris-pemecah-batu/internal/mapping"
+	"github.com/otris-id/otris-pemecah-batu/internal/qc"
 )
 
 type Profile struct {
@@ -40,6 +41,10 @@ type Profile struct {
 	AuthorityChain         []string       `yaml:"authority_chain" json:"authority_chain"`
 	NormalizationAuthority bool           `yaml:"normalization_authority" json:"normalization_authority"`
 	NormalizerIdentity     string         `yaml:"normalizer_identity" json:"normalizer_identity,omitempty"`
+	// QC Governance (optional, immutable reference only)
+	QCApplicability string `yaml:"qc_applicability,omitempty" json:"qc_applicability,omitempty"`
+	QCVerdict       string `yaml:"qc_verdict,omitempty" json:"qc_verdict,omitempty"`
+	QCDigest        string `yaml:"qc_digest,omitempty" json:"qc_digest,omitempty"`
 	// Deprecated legacy governance fields — retained for migration read, not authoritative.
 	// Governed path uses CapabilitySupport/CompatibilityStatus/GovernanceStatus.
 	Status           string `yaml:"status,omitempty" json:"status,omitempty"`
@@ -71,7 +76,7 @@ type BuildOptions struct {
 
 // GOVERNED authority path: requires REPLAY_VALIDATED MappingDefinition.
 // Only this function produces an Integration Profile Candidate with established authority chain.
-func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, model, transport, firmwareTested, outDir, version string) (Profile, error) {
+func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, model, transport, firmwareTested, outDir, version string, qcRecord *qc.QCKnowledgeRecord) (Profile, error) {
 	emptyProfile := Profile{}
 	if m == nil {
 		return emptyProfile, errors.New("MappingDefinition required")
@@ -162,10 +167,25 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		AuthorityChain: []string{
 			fmt.Sprintf("Evidence approved: %s", m.EvidenceGateReportRef),
 			fmt.Sprintf("Replay validated: false_data=0.0 at %s", m.ReplayValidatedAt.Format(time.RFC3339Nano)),
-			fmt.Sprintf("Mapping: %s v%s by %s", claim.MappingIdentity, claim.MappingVersion, m.ProvenanceAuthor),
-			fmt.Sprintf("Parser: %s", claim.ParserIdentity),
 		},
 	}
+
+	// Add QC to authority chain if present
+	if qcRecord != nil {
+		profile.QCApplicability = string(qcRecord.Criteria.Applicability)
+		profile.QCVerdict = string(qcRecord.Verdict)
+		profile.QCDigest = qcRecord.Integrity
+		if qcRecord.Verdict == qc.VerdictPass {
+			profile.AuthorityChain = append(profile.AuthorityChain,
+				fmt.Sprintf("QC validated: digest=%s by %s", qcRecord.Integrity[:16], qcRecord.Reviewer))
+		}
+	}
+
+	// Add mapping and parser to authority chain
+	profile.AuthorityChain = append(profile.AuthorityChain,
+		fmt.Sprintf("Mapping: %s v%s by %s", claim.MappingIdentity, claim.MappingVersion, m.ProvenanceAuthor),
+		fmt.Sprintf("Parser: %s", claim.ParserIdentity),
+	)
 
 	jsonData, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -194,7 +214,14 @@ func BuildFromMappingDefinition(m *mapping.MappingDefinition, manufacturer, mode
 		{"evidence_reference", profile.EvidenceReference},
 		{"validated_at", profile.ValidatedAt},
 		{"normalizer_identity", profile.NormalizerIdentity},
+		{"qc_applicability", profile.QCApplicability},
+		{"qc_verdict", profile.QCVerdict},
+		{"qc_digest", profile.QCDigest},
 	} {
+		// Skip empty QC fields
+		if strings.HasPrefix(field.name, "qc_") && field.value == "" {
+			continue
+		}
 		value, err := json.Marshal(field.value)
 		if err != nil {
 			return emptyProfile, fmt.Errorf("encode %s: %w", field.name, err)

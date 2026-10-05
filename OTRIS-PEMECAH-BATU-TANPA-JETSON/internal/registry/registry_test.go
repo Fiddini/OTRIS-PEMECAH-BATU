@@ -76,7 +76,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	p, err := profilebuilder.BuildFromMappingDefinition(m, "Fixture Maker", "Device R", "serial", "fw-2",
-		filepath.Join(dir, "profile"), "profile-4")
+		filepath.Join(dir, "profile"), "profile-4", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func newFixture(t *testing.T) fixture {
 
 func admit(t *testing.T, f fixture, sequence uint64) *registry.Attestation {
 	t.Helper()
-	a, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, keyID, sequence)
+	a, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, sequence)
 	if err != nil || a == nil {
 		t.Fatalf("admission failed: %v %v", a, err)
 	}
@@ -211,7 +211,7 @@ func TestAdmitRejectsMissingOrInvalidInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a, err := registry.Admit(tc.candidate, tc.mapping, tc.approval, tc.key, tc.keyID, tc.sequence)
+			a, err := registry.Admit(tc.candidate, tc.mapping, tc.approval, nil, "", tc.key, tc.keyID, tc.sequence)
 			if err == nil || a != nil {
 				t.Fatalf("invalid admission accepted: %v %v", a, err)
 			}
@@ -229,7 +229,7 @@ func TestAdmitRejectsForgedApproval(t *testing.T) {
 			target.Field(i).Set(source.Field(i))
 		}
 	}
-	if a, err := registry.Admit(f.candidate, f.mapping, &forged, f.issuerKey, keyID, 1); err == nil || a != nil {
+	if a, err := registry.Admit(f.candidate, f.mapping, &forged, nil, "", f.issuerKey, keyID, 1); err == nil || a != nil {
 		t.Fatal("forged approval admitted")
 	}
 }
@@ -254,7 +254,7 @@ func TestAdmitRejectsMutationAndSubstitution(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				f := newFixture(t)
 				tc.edit(f.candidate)
-				if a, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, keyID, 1); err == nil || a != nil {
+				if a, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, 1); err == nil || a != nil {
 					t.Fatal("mutated candidate admitted")
 				}
 			})
@@ -276,7 +276,7 @@ func TestAdmitRejectsMutationAndSubstitution(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				f := newFixture(t)
 				tc.edit(f.mapping)
-				if a, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, keyID, 1); err == nil || a != nil {
+				if a, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, 1); err == nil || a != nil {
 					t.Fatal("mutated mapping admitted")
 				}
 			})
@@ -297,6 +297,7 @@ func TestAdmitRejectsMutationAndSubstitution(t *testing.T) {
 					tc.args[0].(*profilebuilder.Profile),
 					tc.args[1].(*mapping.MappingDefinition),
 					tc.args[2].(*approval.Approval),
+					nil, "",
 					first.issuerKey, keyID, 1,
 				)
 				if err == nil || a != nil {
@@ -497,7 +498,7 @@ func TestCanonicalPayloadIsFrozenAndDeterministic(t *testing.T) {
 func TestSequenceIsSignedAndMonotonicityIsNotProven(t *testing.T) {
 	f := newFixture(t)
 	older := admit(t, f, 1)
-	newer, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, keyID, 2)
+	newer, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +546,7 @@ func TestProduceE2E01b(t *testing.T) {
 	f := newFixture(t)
 
 	// Call real registry.Admit() with fixture data
-	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, "e2e-test-issuer-01b", 1)
+	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, "e2e-test-issuer-01b", 1)
 	if err != nil {
 		t.Fatalf("registry.Admit failed: %v", err)
 	}
@@ -619,7 +620,7 @@ func newFixtureTCP(t *testing.T) fixture {
 	}
 	// TCP transport for MLLP/localhost ingestion testing
 	p, err := profilebuilder.BuildFromMappingDefinition(m, "E2E-02 TCP Device", "Device TCP", "tcp",
-		"fw-tcp-1", filepath.Join(dir, "profile"), "profile-tcp-1")
+		"fw-tcp-1", filepath.Join(dir, "profile"), "profile-tcp-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +659,7 @@ func TestProduceE2E02tcp(t *testing.T) {
 
 	f := newFixtureTCP(t)
 
-	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, f.issuerKey, "e2e-02-tcp-issuer", 1)
+	attestation, err := registry.Admit(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, "e2e-02-tcp-issuer", 1)
 	if err != nil {
 		t.Fatalf("registry.Admit failed: %v", err)
 	}

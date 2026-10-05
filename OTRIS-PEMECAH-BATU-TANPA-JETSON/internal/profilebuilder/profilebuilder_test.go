@@ -639,7 +639,7 @@ func TestD3FBuildReplayValidated(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	if err != nil {
 		t.Fatalf("REPLAY_VALIDATED rejected: %v", err)
@@ -653,7 +653,7 @@ func TestD3FBuildReplayValidated(t *testing.T) {
 func TestD3FBuildCandidate(t *testing.T) {
 	m := d3fCandidateMapping(t)
 	outDir := t.TempDir()
-	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err == nil {
 		t.Fatal("CANDIDATE accepted")
 	}
@@ -664,7 +664,7 @@ func TestD3FBuildEvidenceOnly(t *testing.T) {
 	m := d3fCandidateMapping(t)
 	d3fApproveEvidence(t, m)
 	outDir := t.TempDir()
-	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err == nil {
 		t.Fatal("EVIDENCE_APPROVED without Replay accepted")
 	}
@@ -677,7 +677,7 @@ func TestD3FBuildForgedAuthority(t *testing.T) {
 	// Manually set ReplayValidatedAt without proper authority binding
 	m.ReplayValidatedAt = time.Now()
 	outDir := t.TempDir()
-	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err == nil {
 		t.Fatal("forged authority accepted")
 	}
@@ -710,7 +710,7 @@ func TestD3FMappingIdentityPreserved(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,7 +732,7 @@ func TestD3FClaimFieldsPreserved(t *testing.T) {
 
 	claim := m.Claim()
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +819,7 @@ func TestD3FNoVendorHardcode(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "CustomVendor", "CustomModel", "Serial", "5.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "CustomVendor", "CustomModel", "Serial", "5.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -835,7 +835,7 @@ func TestD3FNoVerifiedStatus(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +858,7 @@ func TestD3FNoSelfPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	outDir := t.TempDir()
-	if _, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0"); err != nil {
+	if _, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil); err != nil {
 		t.Fatal(err)
 	}
 	d3fRequireStatus(t, m, mapping.StatusReplayValidated)
@@ -899,7 +899,7 @@ func TestD3FMissingParserContext(t *testing.T) {
 func d3fRequireBuildRejected(t *testing.T, m *mapping.MappingDefinition) {
 	t.Helper()
 	outDir := filepath.Join(t.TempDir(), "output")
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err == nil || !reflect.DeepEqual(p, Profile{}) {
 		t.Fatalf("invalid authority accepted: %+v, %v", p, err)
 	}
@@ -994,7 +994,7 @@ func TestD3FPersistenceFailurePreservesAuthority(t *testing.T) {
 	if err := os.WriteFile(path, before, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0"); err == nil {
+	if _, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil); err == nil {
 		t.Fatal("existing profile overwritten")
 	}
 	data, err := os.ReadFile(path)
@@ -1108,7 +1108,7 @@ func TestNormalizationAuthorityComplete(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	if err != nil {
 		t.Fatalf("complete normalization authority rejected: %v", err)
@@ -1130,7 +1130,7 @@ func TestNormalizationAuthorityRequiresNormalizer(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1173,7 +1173,7 @@ func TestNormalizationAuthorityEvidenceRefsPreserved(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
@@ -1198,7 +1198,7 @@ func TestNormalizationAuthorityMappingProfileWireName(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1228,7 +1228,7 @@ func TestNormalizationAuthorityMultipleEntries(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1267,7 +1267,7 @@ func TestNormalizationAuthorityEvidenceIsolation(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1301,7 @@ func TestNormalizationAuthorityDeviceIdentityNotDerived(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "SynthVendor", "SynthModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "SynthVendor", "SynthModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1323,7 +1323,7 @@ func TestNormalizationAuthorityNormalizerPreserved(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,7 +1341,7 @@ func TestNormalizationAuthorityNormalizerIndependentOfParser(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1369,7 +1369,7 @@ func TestNormalizationAuthorityNormalizerIndependentOfProvenance(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1392,8 +1392,8 @@ func TestNormalizationAuthorityDeterministicSerialization(t *testing.T) {
 	outDir1 := t.TempDir()
 	outDir2 := t.TempDir()
 
-	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0")
-	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0")
+	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0", nil)
+	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0", nil)
 
 	data1, _ := json.Marshal(p1)
 	data2, _ := json.Marshal(p2)
@@ -1413,8 +1413,8 @@ func TestNormalizationAuthorityDeterministicDigest(t *testing.T) {
 	outDir1 := t.TempDir()
 	outDir2 := t.TempDir()
 
-	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0")
-	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0")
+	p1, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir1, "1.0", nil)
+	p2, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir2, "1.0", nil)
 
 	data1, _ := json.Marshal(p1)
 	data2, _ := json.Marshal(p2)
@@ -1435,7 +1435,7 @@ func TestNormalizationAuthorityMutationBreaksDigest(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	data1, _ := json.Marshal(p)
 	digest1 := sha256.Sum256(data1)
@@ -1458,7 +1458,7 @@ func TestNormalizationAuthorityNormalizerMutationBreaksDigest(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	data1, _ := json.Marshal(p)
 	digest1 := sha256.Sum256(data1)
@@ -1481,7 +1481,7 @@ func TestNormalizationAuthorityEvidenceRefsMutationBreaksDigest(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	data1, _ := json.Marshal(p)
 	digest1 := sha256.Sum256(data1)
@@ -1506,7 +1506,7 @@ func TestNormalizationAuthoritySourceCodeMutationBreaksDigest(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	data1, _ := json.Marshal(p)
 	digest1 := sha256.Sum256(data1)
@@ -1531,7 +1531,7 @@ func TestNormalizationAuthorityCanonicalConceptMutationBreaksDigest(t *testing.T
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	data1, _ := json.Marshal(p)
 	digest1 := sha256.Sum256(data1)
@@ -1556,7 +1556,7 @@ func TestNormalizationAuthorityD3JInteropPreserved(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	p, _ := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 
 	// Verify profile can be marshalled and unmarshalled without loss
 	data, err := json.Marshal(p)
@@ -1582,7 +1582,7 @@ func TestNormalizationAuthorityWireSchema(t *testing.T) {
 	d3fValidateReplay(t, m)
 
 	outDir := t.TempDir()
-	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0")
+	_, err := BuildFromMappingDefinition(m, "TestVendor", "TestModel", "Serial", "1.0", outDir, "1.0", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

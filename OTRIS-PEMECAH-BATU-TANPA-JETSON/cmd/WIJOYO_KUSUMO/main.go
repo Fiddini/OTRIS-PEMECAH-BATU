@@ -23,6 +23,7 @@ import (
     "github.com/otris-id/otris-pemecah-batu/internal/inspector"
     "github.com/otris-id/otris-pemecah-batu/internal/mapping"
     "github.com/otris-id/otris-pemecah-batu/internal/profilebuilder"
+    "github.com/otris-id/otris-pemecah-batu/internal/qc"
     "github.com/otris-id/otris-pemecah-batu/internal/registry"
     "github.com/otris-id/otris-pemecah-batu/internal/replay"
     "github.com/spf13/cobra"
@@ -321,6 +322,17 @@ Admission requires a new --out directory; approval.json is audit data only.`,
             }
             fmt.Printf("[D3G-3] Replay validated: %s (false_data=%.1f)\n", replayReportPath, replayReport.FalseDataRate)
 
+            // Step 3.5: QC Applicability Decision and Review [D3G-3.5]
+            qcPolicyPath, _ := cmd.Flags().GetString("qc-policy")
+            qcRefPath, _ := cmd.Flags().GetString("qc-reference")
+            qcChallengesPath, _ := cmd.Flags().GetString("qc-challenges")
+
+            qcDecision, err := ReviewQCGovernance(m, qcPolicyPath, qcRefPath, qcChallengesPath, approverFlag, version)
+            if err != nil {
+                return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: QC governance failed: %w", err)
+            }
+            qcRecord := qcDecision.Record
+
             // Step 4: Build into private sibling staging only in admission mode.
             buildDir := outDir
             if admissionMode {
@@ -340,7 +352,7 @@ Admission requires a new --out directory; approval.json is audit data only.`,
                 buildDir = stagingDir
             }
             fmt.Printf("[D3G-4] Building Integration Profile Candidate\n")
-            profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmwareTested, buildDir, version)
+            profile, err := profilebuilder.BuildFromMappingDefinition(m, manufacturer, model, transport, firmwareTested, buildDir, version, qcRecord)
             if err != nil {
                 return fmt.Errorf("[D3G] GOVERNED PIPELINE FAILED: profile build rejected: %w", err)
             }
@@ -353,12 +365,17 @@ Admission requires a new --out directory; approval.json is audit data only.`,
             // Step 5: Live approval, signed admission, self-verification, publication.
             if admissionMode {
                 fmt.Printf("[D3J-5] Engineer approval and signed registry admission (%s)\n", admission.decision)
-                if err := runGovernedAdmission(&profile, m, admission, buildDir, outDir); err != nil {
+                if err := runGovernedAdmission(&profile, m, admission, buildDir, outDir, qcRecord, qcDecision.Applicability); err != nil {
                     return fmt.Errorf("[D3J] GOVERNED HANDOFF FAILED: %w", err)
                 }
                 fmt.Println("=== D3J GOVERNED HANDOFF SUCCEEDED ===")
                 fmt.Printf("  Published: %s\n", outDir)
                 fmt.Printf("  Candidate: CANDIDATE/CANDIDATE (approval and admission are separate artifacts)\n")
+                if qcRecord != nil {
+                    fmt.Printf("  QC: applicability=%s, verdict=%s, digest=%s\n", qcDecision.Applicability, qcRecord.Verdict, qcRecord.Integrity[:16])
+                } else if qcDecision.Applicability != "" {
+                    fmt.Printf("  QC: applicability=%s (no record)\n", qcDecision.Applicability)
+                }
                 fmt.Printf("  Approval: %s by %s (approval.json is audit only)\n", approval.StatusEngineerApproved, admission.approver)
                 fmt.Printf("  Registry: %s sequence %d issuer %s\n", registry.StatusRegistryAdmitted, admission.sequence, admission.issuerKeyID)
                 return nil
@@ -366,6 +383,11 @@ Admission requires a new --out directory; approval.json is audit data only.`,
 
             fmt.Println("=== D3G GOVERNED PIPELINE SUCCEEDED ===")
             fmt.Printf("  Integration Profile Candidate: %s/profile.yaml\n", outDir)
+            if qcRecord != nil {
+                fmt.Printf("  QC: applicability=%s, verdict=%s, digest=%s\n", qcDecision.Applicability, qcRecord.Verdict, qcRecord.Integrity[:16])
+            } else if qcDecision.Applicability != "" {
+                fmt.Printf("  QC: applicability=%s (no record)\n", qcDecision.Applicability)
+            }
             fmt.Printf("  Status: CANDIDATE (requires engineer approval for next stage)\n")
             fmt.Printf("  Authority chain:\n")
             for _, auth := range profile.AuthorityChain {
@@ -385,6 +407,10 @@ Admission requires a new --out directory; approval.json is audit data only.`,
     governedPipelineCmd.Flags().String("transport", "", "transport protocol (tcp|serial|etc)")
     governedPipelineCmd.Flags().String("firmware", "", "firmware version tested")
     governedPipelineCmd.Flags().Int("count", 1000, "replay iteration count")
+    // QC governance flags (optional, define QC applicability)
+    governedPipelineCmd.Flags().String("qc-policy", "", "path to QC acceptance policy JSON (optional, defines REQUIRED/OPTIONAL/NOT_APPLICABLE)")
+    governedPipelineCmd.Flags().String("qc-reference", "", "path to QC reference definition JSON (required if qc-policy applicability is REQUIRED)")
+    governedPipelineCmd.Flags().String("qc-challenges", "", "path to QC reference challenges JSON (required if qc-policy applicability is REQUIRED)")
     // D3J admission flags. Supplying any one makes all of them mandatory; supplying
     // none preserves existing D3G behavior. Only the key PATH is accepted, never key bytes.
     governedPipelineCmd.Flags().String("approver", "", "engineer identity recorded in the approval audit")
@@ -654,4 +680,47 @@ Device/parser context is optional; provenance fields are mandatory.`,
     rootCmd.AddCommand(registerCmd)
 
     return rootCmd
+}
+
+// QC Helper Functions
+func loadQCPolicy(path string) (*qc.AcceptanceCriteria, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read QC policy: %w", err)
+	}
+	var policy qc.AcceptanceCriteria
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return nil, fmt.Errorf("parse QC policy: %w", err)
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("validate QC policy: %w", err)
+	}
+	return &policy, nil
+}
+
+func loadQCReference(path string) (*qc.ReferenceDefinition, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read QC reference: %w", err)
+	}
+	var ref qc.ReferenceDefinition
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return nil, fmt.Errorf("parse QC reference: %w", err)
+	}
+	if err := ref.Validate(); err != nil {
+		return nil, fmt.Errorf("validate QC reference: %w", err)
+	}
+	return &ref, nil
+}
+
+func loadQCChallenges(path string) ([]*qc.ReferenceChallenge, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read QC challenges: %w", err)
+	}
+	var challenges []*qc.ReferenceChallenge
+	if err := json.Unmarshal(data, &challenges); err != nil {
+		return nil, fmt.Errorf("parse QC challenges: %w", err)
+	}
+	return challenges, nil
 }
