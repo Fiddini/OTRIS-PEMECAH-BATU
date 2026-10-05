@@ -81,14 +81,19 @@ func ReviewClaim(claim Claim, evidencePath, reportPath string) (ClaimReport, err
 	}
 	report.Evidence = append([]Evidence{}, bundle.Evidence...)
 	result := report
-	// ponytail: count plus exact binding only; no clinical meaning or document
-	// authenticity inference. Add separate verification before claiming either.
+	// SEMANTIC VERIFICATION BOUNDARY (PB-14-semantic)
+	// Count check first: 0 items → REJECTED, 1 item → NEEDS_MORE_EVIDENCE
+	// Only for >=2 items, apply semantic verification: raw counts don't grant approval.
 	switch len(result.Evidence) {
 	case 0:
+		result.Verdict = "REJECTED"
 	case 1:
 		result.Verdict = "NEEDS_MORE_EVIDENCE"
 	default:
-		result.Verdict = ApprovedForMapping
+		// >=2 items: verify semantic authority requirement
+		// At least one item must be semantic evidence (VENDOR_MANUAL) to establish clinical meaning.
+		// Raw captures/simulator logs prove field existence, not semantics.
+		result.Verdict = VerifySemanticEvidence(claim, result.Evidence)
 	}
 	f, err := os.OpenFile(reportPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
