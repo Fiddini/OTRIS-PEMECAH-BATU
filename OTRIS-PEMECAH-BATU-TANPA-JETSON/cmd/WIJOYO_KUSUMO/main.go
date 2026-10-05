@@ -451,7 +451,183 @@ Admission requires a new --out directory; approval.json is audit data only.`,
     }
     buildCandidatesCmd.Flags().String("out", "", "output directory for candidate records")
 
-    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd)
+    // PB-14 MAPPING-CREATE - build MappingDefinition CANDIDATE from explicit semantic claim
+    mappingCreateCmd := &cobra.Command{
+        Use:   "mapping-create",
+        Short: "PB-14: Create MappingDefinition CANDIDATE from explicit semantic claim",
+        Long: `Build production MappingDefinition CANDIDATE from explicit semantic fields.
+
+Fails closed: UNKNOWN concept/unit, missing provenance, or malformed input are rejected.
+Output is always CANDIDATE status; no automatic transitions.
+Device/parser context is optional; provenance fields are mandatory.`,
+        RunE: func(cmd *cobra.Command, args []string) error {
+            // Extract all flags
+            mappingID, _ := cmd.Flags().GetString("mapping-id")
+            version, _ := cmd.Flags().GetString("version")
+            sourceProto, _ := cmd.Flags().GetString("source-protocol")
+            sourcePos, _ := cmd.Flags().GetInt("source-position")
+            sourceCode, _ := cmd.Flags().GetString("source-code")
+            sourceUnit, _ := cmd.Flags().GetString("source-unit")
+            concept, _ := cmd.Flags().GetString("concept")
+            unit, _ := cmd.Flags().GetString("unit")
+            provenance, _ := cmd.Flags().GetString("provenance")
+            author, _ := cmd.Flags().GetString("author")
+            fingerprint, _ := cmd.Flags().GetString("fingerprint")
+            deviceIdentity, _ := cmd.Flags().GetString("device-identity")
+            parserID, _ := cmd.Flags().GetString("parser-id")
+            outPath, _ := cmd.Flags().GetString("out")
+
+            // Validate required flags
+            for name, val := range map[string]string{
+                "--mapping-id":      mappingID,
+                "--version":         version,
+                "--source-protocol": sourceProto,
+                "--source-code":     sourceCode,
+                "--concept":         concept,
+                "--unit":            unit,
+                "--provenance":      provenance,
+                "--author":          author,
+                "--out":             outPath,
+            } {
+                if val == "" {
+                    return fmt.Errorf("[PB-14] MAPPING CREATE FAILED: missing required flag %s", name)
+                }
+            }
+            if sourcePos <= 0 {
+                return fmt.Errorf("[PB-14] MAPPING CREATE FAILED: source-position must be positive integer")
+            }
+
+            fmt.Println("=== PB-14 MAPPING CLAIM BUILDER ===")
+
+            // Create builder (fail-closed validation of semantic fields)
+            fmt.Printf("[PB-14-1] Creating builder for concept %s / unit %s\n", concept, unit)
+            b, err := mapping.NewBuilder(
+                mappingID, version,
+                sourceProto, sourcePos, sourceCode, sourceUnit,
+                concept, unit,
+                provenance, author,
+            )
+            if err != nil {
+                return fmt.Errorf("[PB-14-1] builder creation failed: %w", err)
+            }
+
+            // Add optional device context
+            if fingerprint != "" {
+                b.WithDeviceFingerprint(fingerprint)
+            }
+            if deviceIdentity != "" {
+                b.WithDeviceIdentity(deviceIdentity)
+            }
+            if parserID != "" {
+                b.WithParserIdentity(parserID)
+            }
+
+            // Build MappingDefinition CANDIDATE
+            fmt.Println("[PB-14-2] Building MappingDefinition CANDIDATE")
+            m, err := b.Build()
+            if err != nil {
+                return fmt.Errorf("[PB-14-2] build failed: %w", err)
+            }
+
+            // Validate output
+            status, err := m.Status()
+            if err != nil || status != mapping.StatusCandidate {
+                return fmt.Errorf("[PB-14-2] build did not produce CANDIDATE, got %s: %v", status, err)
+            }
+            fmt.Printf("[PB-14-2] MappingDefinition CANDIDATE created: %s/%s\n", m.MappingIdentity, m.MappingVersion)
+
+            // Export to JSON
+            fmt.Printf("[PB-14-3] Writing to %s\n", outPath)
+            data, err := json.MarshalIndent(m, "", "  ")
+            if err != nil {
+                return fmt.Errorf("[PB-14-3] marshal failed: %w", err)
+            }
+
+            if err := os.WriteFile(outPath, data, 0600); err != nil {
+                return fmt.Errorf("[PB-14-3] write failed: %w", err)
+            }
+
+            fmt.Println("\n=== PB-14 MAPPING CLAIM BUILDER SUCCEEDED ===")
+            fmt.Printf("  MappingDefinition: %s/%s CANDIDATE\n", m.MappingIdentity, m.MappingVersion)
+            fmt.Printf("  Concept: %s → %s\n", m.SourceCode, m.CanonicalConcept)
+            fmt.Printf("  Output: %s\n", outPath)
+            fmt.Printf("  Next step: governed-pipeline --mapping %s (ReviewEvidence → ReviewReplay → BuildFromMappingDefinition)\n", outPath)
+            return nil
+        },
+    }
+    mappingCreateCmd.Flags().String("mapping-id", "", "mapping identity (e.g., siemens-infinity-147842-001)")
+    mappingCreateCmd.Flags().String("version", "", "mapping version (e.g., 1.0.0)")
+    mappingCreateCmd.Flags().String("source-protocol", "", "source protocol (HL7_V2, ASTM_H, etc.)")
+    mappingCreateCmd.Flags().Int("source-position", 0, "source position (field/column number)")
+    mappingCreateCmd.Flags().String("source-code", "", "source code (e.g., 147842)")
+    mappingCreateCmd.Flags().String("source-unit", "", "source unit as specified in protocol")
+    mappingCreateCmd.Flags().String("concept", "", "canonical concept (e.g., HR_BPM) — cannot be UNKNOWN")
+    mappingCreateCmd.Flags().String("unit", "", "canonical unit (e.g., BPM) — cannot be UNKNOWN")
+    mappingCreateCmd.Flags().String("provenance", "", "narrative provenance (how claim was determined)")
+    mappingCreateCmd.Flags().String("author", "", "provenance author (role/person responsible for claim)")
+    mappingCreateCmd.Flags().String("fingerprint", "", "device fingerprint (optional)")
+    mappingCreateCmd.Flags().String("device-identity", "", "device identity reference (optional)")
+    mappingCreateCmd.Flags().String("parser-id", "", "parser identity (optional)")
+    mappingCreateCmd.Flags().String("out", "", "output JSON file path (exclusive create, no overwrite)")
+
+    // PB-14 MAPPING-EXPORT - export existing MappingDefinition to stdout/file
+    mappingExportCmd := &cobra.Command{
+        Use:   "mapping-export",
+        Short: "PB-14: Export MappingDefinition JSON to file or stdout",
+        RunE: func(cmd *cobra.Command, args []string) error {
+            inputPath, _ := cmd.Flags().GetString("mapping")
+            outPath, _ := cmd.Flags().GetString("out")
+
+            if inputPath == "" {
+                return fmt.Errorf("[PB-14-export] missing required flag --mapping")
+            }
+
+            fmt.Printf("=== PB-14 MAPPING EXPORT ===\n")
+            fmt.Printf("[PB-14-export-1] Reading %s\n", inputPath)
+
+            data, err := os.ReadFile(inputPath)
+            if err != nil {
+                return fmt.Errorf("[PB-14-export-1] read failed: %w", err)
+            }
+
+            m := &mapping.MappingDefinition{}
+            if err := json.Unmarshal(data, m); err != nil {
+                return fmt.Errorf("[PB-14-export-1] parse failed: %w", err)
+            }
+
+            status, err := m.Status()
+            if err != nil {
+                return fmt.Errorf("[PB-14-export-1] validation failed: %w", err)
+            }
+            fmt.Printf("[PB-14-export-1] Loaded: %s/%s %s\n", m.MappingIdentity, m.MappingVersion, status)
+
+            // Pretty-print
+            fmt.Println("[PB-14-export-2] Formatting")
+            formatted, err := json.MarshalIndent(m, "", "  ")
+            if err != nil {
+                return fmt.Errorf("[PB-14-export-2] format failed: %w", err)
+            }
+
+            // Output
+            if outPath == "" {
+                // stdout
+                fmt.Println(string(formatted))
+            } else {
+                // file
+                fmt.Printf("[PB-14-export-3] Writing to %s\n", outPath)
+                if err := os.WriteFile(outPath, formatted, 0600); err != nil {
+                    return fmt.Errorf("[PB-14-export-3] write failed: %w", err)
+                }
+                fmt.Printf("\n=== PB-14 MAPPING EXPORT SUCCEEDED ===\n")
+                fmt.Printf("  Output: %s\n", outPath)
+            }
+            return nil
+        },
+    }
+    mappingExportCmd.Flags().String("mapping", "", "input MappingDefinition JSON file")
+    mappingExportCmd.Flags().String("out", "", "output file (omit for stdout)")
+
+    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd, mappingCreateCmd, mappingExportCmd)
 
     
     var registerCmd = &cobra.Command{
