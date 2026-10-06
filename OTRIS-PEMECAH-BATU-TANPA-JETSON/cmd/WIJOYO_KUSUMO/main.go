@@ -654,6 +654,7 @@ Device/parser context is optional; provenance fields are mandatory.`,
     mappingExportCmd.Flags().String("out", "", "output file (omit for stdout)")
 
     rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd, mappingCreateCmd, mappingExportCmd)
+    registerGovernedCandidatePipelineCmd(rootCmd)
 
     
     var registerCmd = &cobra.Command{
