@@ -656,6 +656,7 @@ Device/parser context is optional; provenance fields are mandatory.`,
     rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd, mappingCreateCmd, mappingExportCmd)
     registerGovernedCandidatePipelineCmd(rootCmd)
     registerGovernedReverificationPipelineCmd(rootCmd)
+    registerNanoPipelineCmd(rootCmd)
 
     
     var registerCmd = &cobra.Command{
