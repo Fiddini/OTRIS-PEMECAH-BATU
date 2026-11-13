@@ -21,7 +21,17 @@ import (
 
 const (
 	// SchemaV1 versions the canonical admission payload; unknown versions are rejected.
+	// FROZEN: TestCanonicalPayloadIsFrozenAndDeterministic asserts its exact byte
+	// layout. V1 attestations carry no expiry, applicability, or revocation epoch --
+	// canonicalPayload() must keep producing exactly the same bytes for V1 forever.
 	SchemaV1 = "otris.registry.admission.v1"
+
+	// SchemaV2 additively extends V1's canonical bytes with three more signed
+	// fields: ExpiresAt, ApplicableFingerprints (joined, length-prefixed per
+	// element so no fingerprint can shift a boundary) and RevocationEpoch. V1's
+	// own field bytes are emitted identically first; V2 only appends after them,
+	// so a V2 verifier could still re-derive the V1 prefix unchanged.
+	SchemaV2 = "otris.registry.admission.v2"
 
 	// StatusRegistryAdmitted means only that governed admission accepted this exact
 	// ENGINEER_APPROVED candidate. It is not VERIFIED, REAL_DEVICE_VALIDATED,
@@ -63,6 +73,15 @@ type Attestation struct {
 	IssuedAt               time.Time `json:"issued_at"`
 	Sequence               uint64    `json:"sequence"`
 	QC                     *QCBinding `json:"qc,omitempty"`           // QC governance binding (optional)
+
+	// V2-only fields (SchemaV2). Zero/empty on a V1 attestation and never
+	// read, signed, or enforced for one -- canonicalPayload() only appends
+	// them when SchemaVersion == SchemaV2, so a V1 attestation's signed
+	// bytes are unaffected by their presence or absence in the struct.
+	ExpiresAt              int64     `json:"expires_at,omitempty"`              // required for V2: Unix seconds
+	ApplicableFingerprints []string  `json:"applicable_fingerprints,omitempty"` // required for V2: non-empty
+	RevocationEpoch        uint64    `json:"revocation_epoch,omitempty"`        // required for V2
+
 	Signature              string    `json:"signature"`
 }
 
@@ -155,6 +174,47 @@ func Admit(
 	return a, nil
 }
 
+// AdmitV2 performs the identical live-governed admission Admit() does (same
+// validation, same candidate/mapping/approval binding -- this calls Admit()
+// itself rather than duplicating its checks), then extends the result with
+// the three V2 authorization-scope fields and re-signs under SchemaV2.
+// Admit() itself is untouched and keeps producing V1 attestations: existing
+// callers see no behavior change.
+//
+// expiresAt, applicableFingerprints and revocationEpoch all become part of
+// the SIGNED bytes (see appendV2CanonicalFields) -- they are not metadata
+// bolted on after signing, so an Edge verifier can trust them exactly as
+// much as it trusts the rest of the attestation.
+func AdmitV2(
+	candidate *profilebuilder.Profile,
+	liveMapping *mapping.MappingDefinition,
+	engineerApproval *approval.Approval,
+	qcRecord *qc.QCKnowledgeRecord,
+	qcApplicability qc.QCApplicability,
+	issuerKey ed25519.PrivateKey,
+	issuerKeyID string,
+	sequence uint64,
+	expiresAt int64,
+	applicableFingerprints []string,
+	revocationEpoch uint64,
+) (*Attestation, error) {
+	a, err := Admit(candidate, liveMapping, engineerApproval, qcRecord, qcApplicability, issuerKey, issuerKeyID, sequence)
+	if err != nil {
+		return nil, err
+	}
+	a.SchemaVersion = SchemaV2
+	a.ExpiresAt = expiresAt
+	a.ApplicableFingerprints = applicableFingerprints
+	a.RevocationEpoch = revocationEpoch
+
+	payload, err := a.canonicalPayload()
+	if err != nil {
+		return nil, err
+	}
+	a.Signature = hex.EncodeToString(ed25519.Sign(issuerKey, payload))
+	return a, nil
+}
+
 // VerifyAttestation checks a persisted attestation against the exact candidate and an
 // explicitly trusted issuer key. It never restores D3H private approval authority.
 func VerifyAttestation(a *Attestation, candidate *profilebuilder.Profile, trustedPublicKey ed25519.PublicKey, expectedKeyID string) error {
@@ -202,6 +262,59 @@ func VerifyAttestation(a *Attestation, candidate *profilebuilder.Profile, truste
 	}
 	if candidate.SemanticEvidenceDigest != a.SemanticEvidenceDigest {
 		return errors.New("candidate semantic evidence digest mismatch")
+	}
+	return nil
+}
+
+// VerifyAttestationV2Authorization checks the V2 authorization-scope fields
+// ONLY -- call this AFTER VerifyAttestation has already proven the signature
+// and candidate binding. Checking authorization scope on an attestation
+// whose signature was never verified would mean trusting attacker-supplied
+// expiry/fingerprint/revocation bytes, which is exactly what Stage C's
+// original stub got wrong.
+//
+// A V1 attestation has no authorization scope to check: this function
+// returns an error for one rather than silently treating "no V2 fields" as
+// "authorization granted" -- callers that need V2 guarantees must receive a
+// V2 attestation, not fall back to a weaker V1 one.
+//
+// now is passed in (not time.Now() internally) so callers can test expiry
+// deterministically and so a single call site controls what "now" means.
+func VerifyAttestationV2Authorization(a *Attestation, now time.Time, deviceFingerprint string, minValidRevocationEpoch uint64) error {
+	if a == nil {
+		return errors.New("attestation required")
+	}
+	if a.SchemaVersion != SchemaV2 {
+		return fmt.Errorf("attestation schema %q carries no V2 authorization scope", a.SchemaVersion)
+	}
+	if a.ExpiresAt <= 0 {
+		return errors.New("v2 attestation missing expires_at")
+	}
+	if now.Unix() > a.ExpiresAt {
+		return fmt.Errorf("attestation expired at %d (now %d)", a.ExpiresAt, now.Unix())
+	}
+	if len(a.ApplicableFingerprints) == 0 {
+		return errors.New("v2 attestation missing applicable_fingerprints")
+	}
+	if strings.TrimSpace(deviceFingerprint) == "" {
+		return errors.New("device fingerprint is required")
+	}
+	matched := false
+	for _, fp := range a.ApplicableFingerprints {
+		if subtle.ConstantTimeCompare([]byte(fp), []byte(deviceFingerprint)) == 1 {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return errors.New("device fingerprint is not in this attestation's applicable scope")
+	}
+	// A historically-valid signature must never outrun a later revocation: an
+	// attestation signed under epoch 3 is not reauthorized just because its
+	// bytes still verify -- minValidRevocationEpoch is the floor the caller's
+	// current trusted policy requires.
+	if a.RevocationEpoch < minValidRevocationEpoch {
+		return fmt.Errorf("attestation revocation epoch %d is below required minimum %d", a.RevocationEpoch, minValidRevocationEpoch)
 	}
 	return nil
 }
@@ -273,10 +386,14 @@ func candidateDigest(p *profilebuilder.Profile) (string, error) {
 // Every field is length-prefixed, so no combination of values can shift a boundary
 // and forge a different payload with identical bytes. Times are RFC3339Nano in UTC;
 // the sequence is decimal. Signature is excluded: it signs these bytes.
-// Adding, removing or reordering a field is a breaking change and needs a new
-// SchemaVersion; the frozen golden test in this package fails if bytes change.
+// Adding, removing or reordering a V1 field is a breaking change to the frozen
+// golden test (TestCanonicalPayloadIsFrozenAndDeterministic) -- V1's own fields
+// and QC block below are untouched by SchemaV2. SchemaV2 only appends ExpiresAt,
+// ApplicableFingerprints (each element length-prefixed, then the whole list
+// length-prefixed, so no fingerprint can forge a boundary) and RevocationEpoch
+// strictly after everything V1/QC already writes.
 func (a *Attestation) canonicalPayload() ([]byte, error) {
-	if a.SchemaVersion != SchemaV1 {
+	if a.SchemaVersion != SchemaV1 && a.SchemaVersion != SchemaV2 {
 		return nil, fmt.Errorf("unsupported admission schema version %q", a.SchemaVersion)
 	}
 	if a.AdmissionStatus != StatusRegistryAdmitted {
@@ -328,5 +445,47 @@ func (a *Attestation) canonicalPayload() ([]byte, error) {
 		}
 	}
 
+	if a.SchemaVersion == SchemaV2 {
+		if err := a.appendV2CanonicalFields(&payload); err != nil {
+			return nil, err
+		}
+	}
+
 	return []byte(payload.String()), nil
+}
+
+// appendV2CanonicalFields writes ExpiresAt, ApplicableFingerprints and
+// RevocationEpoch after everything canonicalPayload already wrote. All three
+// are required (non-zero / non-empty) for V2 -- a V2 attestation that omits
+// authorization scope is not a weaker V2, it is a malformed one, so this
+// fails closed rather than signing an empty/permissive scope.
+func (a *Attestation) appendV2CanonicalFields(payload *strings.Builder) error {
+	if a.ExpiresAt <= 0 {
+		return errors.New("schema v2 requires expires_at greater than zero")
+	}
+	if len(a.ApplicableFingerprints) == 0 {
+		return errors.New("schema v2 requires at least one applicable fingerprint")
+	}
+	// RevocationEpoch has no "required non-zero" rule of its own -- epoch 0 is
+	// a legitimate first epoch. What matters is that it is IN the signed bytes.
+
+	fmt.Fprintf(payload, "%d:%s\n", len(strconv.FormatInt(a.ExpiresAt, 10)), strconv.FormatInt(a.ExpiresAt, 10))
+
+	var fpList strings.Builder
+	for i, fp := range a.ApplicableFingerprints {
+		if !utf8.ValidString(fp) {
+			return fmt.Errorf("invalid UTF-8 in applicable fingerprint %d", i)
+		}
+		if strings.TrimSpace(fp) == "" {
+			return fmt.Errorf("empty applicable fingerprint at index %d", i)
+		}
+		fmt.Fprintf(&fpList, "%d:%s,", len(fp), fp)
+	}
+	fpListStr := fpList.String()
+	fmt.Fprintf(payload, "%d:%s\n", len(fpListStr), fpListStr)
+
+	revocationStr := strconv.FormatUint(a.RevocationEpoch, 10)
+	fmt.Fprintf(payload, "%d:%s\n", len(revocationStr), revocationStr)
+
+	return nil
 }

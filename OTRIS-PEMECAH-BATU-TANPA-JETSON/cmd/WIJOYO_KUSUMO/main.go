@@ -2,10 +2,13 @@
 package main
 
 import (
+    "crypto/ed25519"
+    "encoding/hex"
     "encoding/json"
     "errors"
     "fmt"
     "os"
+    "strings"
     "time"
 
     "github.com/otris-id/otris-pemecah-batu/internal/approval"
@@ -417,6 +420,43 @@ Admission requires a new --out directory; approval.json is audit data only.`,
     governedPipelineCmd.Flags().String("decision", "", "explicit engineer decision: APPROVE or REJECT")
     governedPipelineCmd.Flags().String("issuer-key", "", "path to registry issuer Ed25519 private key (64 raw bytes or 128 hex chars)")
     governedPipelineCmd.Flags().String("issuer-key-id", "", "registry issuer key id recorded in the attestation")
+
+    // D3J/Stage C6: derive and print ONLY the public key from an existing
+    // issuer private-key file, so it can be handed to an Edge operator for
+    // OTRIS_ISSUER_PUBLIC_KEY_HEX without the private key ever leaving this
+    // machine or this command's own process memory. Reads the key through
+    // the exact same loadIssuerKey() the signing path uses, so there is no
+    // separate parsing logic that could derive a different key than the one
+    // governed-pipeline actually signs with.
+    issuerPublicKeyCmd := &cobra.Command{
+        Use:   "issuer-public-key",
+        Short: "D3J/C6: print the Ed25519 public key for an existing issuer private key (never prints the private key)",
+        Long: `Reads the issuer private key at --issuer-key (same format governed-pipeline's
+--issuer-key accepts: 64 raw bytes or 128 hex chars), derives its Ed25519 public
+key, and prints ONLY that public key as hex to stdout.
+
+The private key file is never copied, logged, or otherwise exposed by this
+command -- it is read once, held in memory only long enough to derive the
+public key, then zeroed, identically to how governed-pipeline itself handles
+it. Hand the printed hex string to whoever configures an Edge deployment's
+OTRIS_ISSUER_PUBLIC_KEY_HEX; never transmit the private key file itself to
+an Edge machine.`,
+        RunE: func(cmd *cobra.Command, args []string) error {
+            issuerKeyPath, _ := cmd.Flags().GetString("issuer-key")
+            if strings.TrimSpace(issuerKeyPath) == "" {
+                return errors.New("--issuer-key is required")
+            }
+            issuerKey, err := loadIssuerKey(issuerKeyPath)
+            if err != nil {
+                return fmt.Errorf("read issuer key: %w", err)
+            }
+            defer zero(issuerKey)
+            publicKey := issuerKey.Public().(ed25519.PublicKey)
+            fmt.Println(hex.EncodeToString(publicKey))
+            return nil
+        },
+    }
+    issuerPublicKeyCmd.Flags().String("issuer-key", "", "path to registry issuer Ed25519 private key (same file governed-pipeline signs with)")
     governedPipelineCmd.Flags().Uint64("sequence", 0, "governed admission sequence (must be greater than zero)")
 
     // full pipeline
@@ -653,7 +693,7 @@ Device/parser context is optional; provenance fields are mandatory.`,
     mappingExportCmd.Flags().String("mapping", "", "input MappingDefinition JSON file")
     mappingExportCmd.Flags().String("out", "", "output file (omit for stdout)")
 
-    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd, mappingCreateCmd, mappingExportCmd)
+    rootCmd.AddCommand(captureCmd, inspectCmd, framingCmd, classifyCmd, fingerprintCmd, diffCmd, correlateCmd, evidenceCmd, replayCmd, buildCmd, governedPipelineCmd, pipelineCmd, buildCandidatesCmd, mappingCreateCmd, mappingExportCmd, issuerPublicKeyCmd)
     registerGovernedCandidatePipelineCmd(rootCmd)
     registerGovernedReverificationPipelineCmd(rootCmd)
     registerNanoPipelineCmd(rootCmd)

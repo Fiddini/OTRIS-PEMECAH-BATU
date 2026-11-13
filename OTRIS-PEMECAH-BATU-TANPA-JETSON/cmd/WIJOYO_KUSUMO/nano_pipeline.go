@@ -87,6 +87,7 @@ Governance constraints preserved:
 
 			captureCfg := capture.Config{
 				Ingress: ingress.Config{
+					Mode: "passive",
 					Transport:  ingressProto,
 					ListenAddr: ingressAddr,
 				},

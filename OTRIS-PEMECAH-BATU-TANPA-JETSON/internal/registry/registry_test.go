@@ -684,3 +684,122 @@ func TestProduceE2E02tcp(t *testing.T) {
 
 	t.Logf("E2E-02 TCP artifacts written to %s", artifactsDir)
 }
+
+// Stage C5: AdmitV2 must preserve every V1 guarantee (same governed-chain
+// validation, same signature verification via VerifyAttestation) while
+// additionally binding expiry/applicability/revocation into the signed bytes.
+func admitV2(t *testing.T, f fixture, sequence uint64, expiresAt time.Time, fingerprints []string, revocationEpoch uint64) *registry.Attestation {
+	t.Helper()
+	a, err := registry.AdmitV2(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, sequence,
+		expiresAt.Unix(), fingerprints, revocationEpoch)
+	if err != nil {
+		t.Fatalf("AdmitV2 failed: %v", err)
+	}
+	return a
+}
+
+func TestAdmitV2ProducesVerifiableSchemaV2Attestation(t *testing.T) {
+	f := newFixture(t)
+	expires := time.Now().Add(time.Hour)
+	a := admitV2(t, f, 1, expires, []string{"fixture-fp"}, 3)
+
+	if a.SchemaVersion != registry.SchemaV2 {
+		t.Fatalf("expected SchemaV2, got %q", a.SchemaVersion)
+	}
+	if err := registry.VerifyAttestation(a, f.candidate, f.publicKey, keyID); err != nil {
+		t.Fatalf("V2 attestation failed base signature verification: %v", err)
+	}
+	if err := registry.VerifyAttestationV2Authorization(a, time.Now(), "fixture-fp", 0); err != nil {
+		t.Fatalf("V2 authorization check failed on a valid attestation: %v", err)
+	}
+}
+
+func TestAdmitV2DoesNotChangeV1Behavior(t *testing.T) {
+	f := newFixture(t)
+	v1 := admit(t, f, 1)
+	if v1.SchemaVersion != registry.SchemaV1 {
+		t.Fatalf("Admit() must still produce SchemaV1, got %q", v1.SchemaVersion)
+	}
+	if err := registry.VerifyAttestation(v1, f.candidate, f.publicKey, keyID); err != nil {
+		t.Fatalf("V1 attestation broken by V2 changes: %v", err)
+	}
+	// A V1 attestation has no authorization scope -- must reject, not silently pass.
+	if err := registry.VerifyAttestationV2Authorization(v1, time.Now(), "fixture-fp", 0); err == nil {
+		t.Fatal("V1 attestation must not pass V2 authorization check")
+	}
+}
+
+func TestVerifyAttestationV2AuthorizationRejectsExpired(t *testing.T) {
+	f := newFixture(t)
+	expires := time.Now().Add(-time.Hour) // already expired
+	a := admitV2(t, f, 1, expires, []string{"fixture-fp"}, 0)
+	if err := registry.VerifyAttestation(a, f.candidate, f.publicKey, keyID); err != nil {
+		t.Fatalf("signature must still verify on an expired attestation: %v", err)
+	}
+	if err := registry.VerifyAttestationV2Authorization(a, time.Now(), "fixture-fp", 0); err == nil {
+		t.Fatal("expired attestation must fail V2 authorization")
+	}
+}
+
+func TestVerifyAttestationV2AuthorizationRejectsWrongFingerprint(t *testing.T) {
+	f := newFixture(t)
+	a := admitV2(t, f, 1, time.Now().Add(time.Hour), []string{"fixture-fp"}, 0)
+	if err := registry.VerifyAttestationV2Authorization(a, time.Now(), "some-other-device", 0); err == nil {
+		t.Fatal("wrong device fingerprint must fail V2 authorization")
+	}
+}
+
+func TestVerifyAttestationV2AuthorizationRejectsBelowMinimumRevocationEpoch(t *testing.T) {
+	f := newFixture(t)
+	a := admitV2(t, f, 1, time.Now().Add(time.Hour), []string{"fixture-fp"}, 2)
+	if err := registry.VerifyAttestationV2Authorization(a, time.Now(), "fixture-fp", 2); err != nil {
+		t.Fatalf("epoch equal to minimum must pass: %v", err)
+	}
+	if err := registry.VerifyAttestationV2Authorization(a, time.Now(), "fixture-fp", 3); err == nil {
+		t.Fatal("attestation signed under a revoked (lower) epoch must fail once minimum epoch advances")
+	}
+}
+
+func TestAdmitV2RejectsEmptyApplicableFingerprints(t *testing.T) {
+	f := newFixture(t)
+	_, err := registry.AdmitV2(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, 1,
+		time.Now().Add(time.Hour).Unix(), nil, 0)
+	if err == nil {
+		t.Fatal("AdmitV2 must reject an empty applicable-fingerprints list")
+	}
+}
+
+func TestAdmitV2RejectsZeroExpiry(t *testing.T) {
+	f := newFixture(t)
+	_, err := registry.AdmitV2(f.candidate, f.mapping, f.approval, nil, "", f.issuerKey, keyID, 1,
+		0, []string{"fixture-fp"}, 0)
+	if err == nil {
+		t.Fatal("AdmitV2 must reject a zero expires_at")
+	}
+}
+
+// Tampering any V2-only field after signing must invalidate the signature,
+// same guarantee TestCanonicalPayloadIsFrozenAndDeterministic proves for V1
+// fields -- the V2 fields are signed bytes, not metadata bolted on after.
+func TestAdmitV2TamperingIsRejected(t *testing.T) {
+	f := newFixture(t)
+	a := admitV2(t, f, 1, time.Now().Add(time.Hour), []string{"fixture-fp", "other-fp"}, 5)
+
+	tamperExpiry := *a
+	tamperExpiry.ExpiresAt += 1
+	if err := registry.VerifyAttestation(&tamperExpiry, f.candidate, f.publicKey, keyID); err == nil {
+		t.Fatal("tampered expires_at must fail signature verification")
+	}
+
+	tamperFingerprint := *a
+	tamperFingerprint.ApplicableFingerprints = []string{"fixture-fp", "attacker-fp"}
+	if err := registry.VerifyAttestation(&tamperFingerprint, f.candidate, f.publicKey, keyID); err == nil {
+		t.Fatal("tampered applicable_fingerprints must fail signature verification")
+	}
+
+	tamperRevocation := *a
+	tamperRevocation.RevocationEpoch = 999
+	if err := registry.VerifyAttestation(&tamperRevocation, f.candidate, f.publicKey, keyID); err == nil {
+		t.Fatal("tampered revocation_epoch must fail signature verification")
+	}
+}
