@@ -1,0 +1,7 @@
+.DS_Store
+**/.DS_Store
+~$*
+*.tmp
+# Binary hasil build - jangan commit, pakai Release saja
+pemecah-batu
+OTRIS-PEMECAH-BATU-TANPA-JETSON/pemecah-batu
