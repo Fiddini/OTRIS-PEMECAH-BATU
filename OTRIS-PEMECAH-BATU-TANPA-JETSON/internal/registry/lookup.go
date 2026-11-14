@@ -83,6 +83,10 @@ func LookupByIntegrationIdentity(
 	if err != nil {
 		return nil, fmt.Errorf("store query failed: %w", err)
 	}
+	// BENTENG OTRIS PB15: STOP kalau volume tidak lazim
+	if CheckPemakaianTidakLazim(len(attestations), true, false) {
+		return nil, errors.New("STOP lokal: pemakaian tidak lazim")
+	}
 
 	if len(attestations) == 0 {
 		// No match found; return nil (caller handles no-match case)
