@@ -99,7 +99,7 @@ echo "[3] Build..."
 rm -rf bin
 mkdir -p bin
 go mod tidy
-go build -o bin/pemecah-batu ./cmd/pemecah-batu
+go build -o bin/pemecah-batu ./cmd/WIJOYO_KUSUMO
 echo "BUILD exit=$?"
 ls -lh bin/pemecah-batu
 ./bin/pemecah-batu --help | head -n 15

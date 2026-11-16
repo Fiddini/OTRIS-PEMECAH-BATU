@@ -4,7 +4,7 @@ tidy:
 	go mod tidy
 
 build:
-	go build -o bin/pemecah-batu ./cmd/pemecah-batu
+	go build -o bin/pemecah-batu ./cmd/WIJOYO_KUSUMO
 
 run-capture-file: build
 	@echo "MSH|^~\\&|ABC|001|70|bpm" > /tmp/sample_hl7.txt

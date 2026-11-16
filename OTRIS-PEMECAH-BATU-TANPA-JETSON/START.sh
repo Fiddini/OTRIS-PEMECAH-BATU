@@ -4,7 +4,7 @@ echo "=== OTRIS PEMECAH BATU - CLEAN START ==="
 echo "Wakaf Ayahanda Wijoyo Kusumo - Allahu Latif 125x"
 cd "$(dirname "$0")"
 go mod tidy
-go build -o bin/pemecah-batu ./cmd/pemecah-batu
+go build -o bin/pemecah-batu ./cmd/WIJOYO_KUSUMO
 ./bin/pemecah-batu --help
 echo ""
 echo "Test tanpa alat:"
