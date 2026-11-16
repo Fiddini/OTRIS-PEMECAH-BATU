@@ -67,6 +67,13 @@ Governance constraints preserved:
 			libraryDir, _ := cmd.Flags().GetString("library")
 			evidencePath, _ := cmd.Flags().GetString("evidence")
 			replayDir, _ := cmd.Flags().GetString("replay-dir")
+			duration, err := cmd.Flags().GetDuration("duration")
+			if err != nil {
+				return fmt.Errorf("[NANO] invalid duration: %w", err)
+			}
+			if duration <= 0 {
+				return fmt.Errorf("[NANO] --duration must be greater than zero")
+			}
 
 			// Validate required flags
 			if outDir == "" {
@@ -94,8 +101,8 @@ Governance constraints preserved:
 				OutDir: outDir,
 			}
 
-			// Capture runs until timeout (0 = indefinite; use Ctrl+C)
-			if err := capture.Run(captureCfg, 0); err != nil {
+			// Capture runs for the configured positive duration.
+			if err := capture.Run(captureCfg, duration); err != nil {
 				return fmt.Errorf("[NANO] capture failed: %w", err)
 			}
 
@@ -235,6 +242,7 @@ func registerNanoPipelineCmd(rootCmd *cobra.Command) {
 	cmd.Flags().String("ingress-addr", "", "listening address (e.g., :2400) [required]")
 	cmd.Flags().String("ingress-proto", "tcp", "protocol: tcp or serial")
 	cmd.Flags().String("out", "", "output directory for session data [required]")
+	cmd.Flags().Duration("duration", 30*time.Second, "capture duration (must be greater than zero)")
 
 	// Discovery flags
 	cmd.Flags().String("library", "", "profile library directory (optional)")
