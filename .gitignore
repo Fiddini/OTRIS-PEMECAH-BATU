@@ -11,3 +11,6 @@ OTRIS-PEMECAH-BATU-TANPA-JETSON/pemecah-batu
 *.key
 *.pem
 
+# PENGAMAN ALDO v2 16 Nov 2026
+*.env
+*secret*
